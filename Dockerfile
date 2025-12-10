@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o repopsy .
 
 # Final stage
-FROM alpine:3.19
+FROM alpine:3.23
 
 # Install git (required for repopsy to work)
 RUN apk add --no-cache git
