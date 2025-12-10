@@ -24,8 +24,7 @@ How It Works:
 ### With Homebrew
 
 ```bash
-brew tap andpalmier/tap
-brew install repopsy
+brew install andpalmier/tap/repopsy
 ```
 
 ### With Go
