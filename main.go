@@ -1,12 +1,11 @@
-// Package main is the entry point for the gitxplode CLI application.
-// gitxplode expands a git repository by extracting each commit into
-// a separate folder for easy comparison and analysis.
+// repopsy expands a git repository by extracting each commit into
+// a separate folder for easy comparison and analysis
 package main
 
 import (
 	"os"
 
-	"github.com/andpalmier/gitxplode/cmd"
+	"github.com/andpalmier/repopsy/cmd"
 )
 
 // Version information (set at build time via -ldflags)

@@ -1,131 +1,138 @@
-# gitxplode 🔮
+# repopsy
 
-**Expand git repositories by extracting each commit into a separate folder.**
+<p align="center">
+    <a href="https://github.com/andpalmier/repopsy/blob/main/LICENSE"><img alt="Software License" src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg"></a>
+    <a href="https://godoc.org/github.com/andpalmier/repopsy"><img alt="GoDoc Card" src="https://godoc.org/github.com/andpalmier/repopsy?status.svg"></a>
+    <a href="https://goreportcard.com/report/github.com/andpalmier/repopsy"><img alt="Go Report Card" src="https://goreportcard.com/badge/github.com/andpalmier/repopsy?style=flat-square"></a>
+    <a href="https://x.com/intent/follow?screen_name=andpalmier"><img src="https://img.shields.io/twitter/follow/andpalmier?style=social&logo=x" alt="follow on X"></a>
+</p>
 
-gitxplode takes a git repository and creates a snapshot folder for every commit, enabling easy comparison, analysis, or archival of code evolution.
+**Repopsy** stands for **Rep**ository aut**opsy**.
 
-## Features
+**Repopsy** is an OSINT tool to gather information on a git repository, it takes a git repo and *"explodes it"*: creating a snapshot folder for every commit, enabling easy comparison, analysis, and archival of code evolution.
 
-- ⚡ **Fast** - Parallel extraction using configurable worker pools
-- 📦 **Zero Dependencies** - Uses git CLI, no external Go libraries required
-- 🎨 **Flexible Naming** - Choose between hash, date-hash, or index-hash folder formats
-- 🖥️ **Nice UX** - Progress bar with ETA, graceful interrupt handling
-- 🔧 **Simple** - Clean CLI with intuitive flags
+How It Works:
+
+1. Validates the `git` repo
+2. Lists commits
+3. Creates worker goroutines
+4. Each worker uses `git archive | tar -x` for efficient extraction
+5. Writes metadata to each folder in `COMMIT_INFO.txt`
 
 ## Installation
 
-### Using Go Install
+### With Homebrew
 
 ```bash
-go install github.com/andpalmier/gitxplode@latest
+brew tap andpalmier/tap
+brew install repopsy
+```
+
+### With Go
+
+```bash
+go install github.com/andpalmier/repopsy@latest
+```
+
+### Pre-built Binaries
+
+Download pre-built binaries from the [Releases](https://github.com/andpalmier/repopsy/releases) page:
+
+**Linux:**
+
+```bash
+curl -LO https://github.com/andpalmier/repopsy/releases/latest/download/repopsy_linux_amd64.tar.gz
+tar -xzf repopsy_linux_amd64.tar.gz
+sudo mv repopsy /usr/local/bin/
+```
+
+**macOS:**
+
+```bash
+curl -LO https://github.com/andpalmier/repopsy/releases/latest/download/repopsy_darwin_arm64.tar.gz
+tar -xzf repopsy_darwin_arm64.tar.gz
+sudo mv repopsy /usr/local/bin/
+```
+
+### Docker
+
+```bash
+docker pull ghcr.io/andpalmier/repopsy:latest
+docker run --rm -v "$(pwd):/repo" ghcr.io/andpalmier/repopsy:latest /repo
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/andpalmier/gitxplode.git
-cd gitxplode
-go build -o gitxplode .
+git clone https://github.com/andpalmier/repopsy.git
+cd repopsy
+go build -o repopsy .
 ```
-
-## Requirements
-
-- Go 1.21+ (for building)
-- Git (must be available in PATH)
 
 ## Usage
 
 ```bash
-gitxplode [flags] <repository-path>
+repopsy [flags] <repository-path>
 ```
+
+### Basic execution
+
+```bash
+repopsy .
+```
+
+### Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-o`, `--output` | Output directory | `./<repo-name>-exploded` |
+| `-w`, `--workers` | Number of parallel workers | Number of CPUs |
+| `-n`, `--limit` | Maximum number of commits to extract | 0 (all) |
+| `-b`, `--branch` | Branch to extract from | all branches |
+| `-v`, `--verbose` | Show detailed output per commit | false |
+| `--version` | Show version information | false |
 
 ### Examples
 
+Extract last 5 commits:
+
 ```bash
-# Extract all commits from current directory
-gitxplode .
-
-# Extract last 10 commits to custom output directory
-gitxplode -n 10 -o ./versions /path/to/repo
-
-# Extract with date-prefixed folders using 4 workers
-gitxplode -f date-hash -w 4 /path/to/repo
-
-# Quiet mode (no progress output)
-gitxplode -q .
-
-# Verbose mode (show each commit as it's extracted)
-gitxplode -v .
+repopsy -n 5 /path/to/repo
 ```
 
-### Flags
+Extract from a specific branch:
 
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--output` | `-o` | `<repo>-exploded` | Output directory |
-| `--workers` | `-w` | CPU count | Number of parallel workers |
-| `--limit` | `-n` | 0 (all) | Maximum commits to extract |
-| `--branch` | `-b` | HEAD | Branch to extract from |
-| `--format` | `-f` | `hash` | Folder naming format |
-| `--quiet` | `-q` | false | Suppress progress output |
-| `--verbose` | `-v` | false | Show per-commit details |
-| `--version` | | | Show version information |
-| `--help` | `-h` | | Show help message |
+```bash
+repopsy -b main /path/to/repo
+```
 
-### Folder Naming Formats
+Verbose output:
 
-| Format | Example | Description |
-|--------|---------|-------------|
-| `hash` | `abc1234` | Short commit hash |
-| `date-hash` | `2024-01-15_abc1234` | Date prefix with hash |
-| `index-hash` | `001_abc1234` | Sequential index with hash |
+```bash
+repopsy -v .
+```
 
 ## Output Structure
 
+When extracting all branches:
 ```
-myrepo-exploded/
-├── abc1234/           # Oldest commit
-│   ├── main.go
+<repo>-exploded/
+├── main/
+│   ├── 20231205_143022_abc1234/
+│   │   ├── COMMIT_INFO.txt
+│   │   └── ... (source files)
+│   └── 20231205_150000_def5678/
+├── feature_branch/
 │   └── ...
-├── def5678/           # Second commit
-│   ├── main.go
-│   ├── utils.go
-│   └── ...
-└── ghi9012/           # Newest commit
-    ├── main.go
-    ├── utils.go
-    ├── README.md
+└── develop/
     └── ...
 ```
 
-## Use Cases
-
-- **Code Review** - Compare file changes across multiple commits side-by-side
-- **Static Analysis** - Run analysis tools on historical versions
-- **Archival** - Create standalone snapshots of repository states
-- **Debugging** - Quickly access code at specific points in history
-- **Documentation** - Generate visual diffs for documentation purposes
-
-## How It Works
-
-1. Opens the git repository and validates it
-2. Lists commits (optionally filtered by branch/limit)
-3. Spawns a pool of worker goroutines
-4. Each worker uses `git archive | tar -x` to extract commit contents
-5. Progress is reported in real-time with ETA
-
-The extraction uses `git archive` piped to `tar`, which is efficient and doesn't require worktree manipulation or temporary checkouts.
-
-## Performance Tips
-
-- **Use SSDs** - Extraction is I/O bound, SSDs significantly improve performance
-- **Adjust Workers** - For large files, fewer workers may be faster; for many small files, more workers help
-- **Limit Commits** - Use `-n` to extract only recent commits if you don't need full history
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+When extracting a single branch:
+```
+<repo>-exploded/
+├── 20231205_143022_abc1234/
+│   ├── COMMIT_INFO.txt
+│   └── ... (source files)
+└── 20231205_150000_def5678/
+```

@@ -1,0 +1,25 @@
+# Binaries
+repopsy
+*.exe
+
+# Test output
+test_output/
+test_output_v*/
+*-exploded/
+
+# Test reports
+test_report.json
+report_v*.json
+
+# Build artifacts
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

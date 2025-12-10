@@ -1,30 +1,81 @@
 // Package git provides functionality for interacting with git repositories.
-// It wraps the git CLI to provide a clean Go interface for common operations
-// like listing commits and extracting commit trees.
 package git
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"text/template"
 	"time"
 )
 
+// metadataTemplateStr is the template for COMMIT_INFO.txt files
+const metadataTemplateStr = `COMMIT INFORMATION
+===========================
+
+Hash:           {{.Hash}}
+Short Hash:     {{.ShortHash}}
+
+AUTHOR (who wrote the code)
+---------------------------
+Name:           {{.Author}}
+Email:          {{.AuthorEmail}}
+Date:           {{.AuthorDate.Format "2006-01-02T15:04:05Z07:00"}}
+Timestamp:      {{.AuthorDate.Unix}}
+
+COMMITTER (who applied the commit)
+----------------------------------
+Name:           {{.Committer}}
+Email:          {{.CommitterEmail}}
+Date:           {{.CommitDate.Format "2006-01-02T15:04:05Z07:00"}}
+Timestamp:      {{.CommitDate.Unix}}
+{{if ne .Author .Committer}}
+NOTE: Author and Committer are different.
+{{end}}
+VERIFICATION
+------------
+GPG Signature:  {{.GPGSignature | formatGPGStatus}}
+
+LINEAGE
+-------
+Parents:        {{if .ParentHashes}}{{range .ParentHashes}}{{.}} {{end}}{{else}}(root commit - no parents){{end}}
+
+CHANGE STATISTICS
+-----------------
+Files Changed:  {{.FilesChanged}}
+Insertions:     +{{.Insertions}}
+Deletions:      -{{.Deletions}}
+
+COMMIT MESSAGE
+--------------
+Subject:
+{{.Subject}}
+
+Full Message:
+{{.FullMessage}}
+`
+
+var metadataTemplate = template.Must(template.New("metadata").Funcs(template.FuncMap{
+	"formatGPGStatus": formatGPGStatus,
+}).Parse(metadataTemplateStr))
+
 // Commit represents a single git commit with its metadata.
-// It contains the essential information needed for identification
-// and display purposes during extraction.
 type Commit struct {
-	// Hash is the full 40-character SHA-1 hash of the commit
-	Hash string
-
-	// ShortHash is the abbreviated 7-character hash for display
-	ShortHash string
-
-	// Author is the name of the commit author
-	Author string
-
-	// Date is the timestamp when the commit was created
-	Date time.Time
-
-	// Subject is the first line of the commit message
-	Subject string
+	Hash           string
+	ShortHash      string
+	Author         string
+	AuthorEmail    string
+	AuthorDate     time.Time
+	Committer      string
+	CommitterEmail string
+	CommitDate     time.Time
+	Subject        string
+	ParentHashes   []string
+	FullMessage    string
+	GPGSignature   string
+	FilesChanged   int
+	Insertions     int
+	Deletions      int
 }
 
 // String returns a human-readable representation of the commit.
@@ -32,41 +83,41 @@ func (c Commit) String() string {
 	return c.ShortHash + " " + c.Subject
 }
 
-// FolderName generates an output folder name based on the specified format.
-// Supported formats:
-//   - "hash": just the short hash (e.g., "abc1234")
-//   - "date-hash": date prefix with hash (e.g., "2024-01-15_abc1234")
-//   - "index-hash": index prefix with hash (e.g., "001_abc1234")
-func (c Commit) FolderName(format string, index int) string {
-	switch format {
-	case "date-hash":
-		return c.Date.Format("2006-01-02") + "_" + c.ShortHash
-	case "index-hash":
-		return formatIndex(index) + "_" + c.ShortHash
-	default: // "hash"
-		return c.ShortHash
+// WriteMetadataFile writes a COMMIT_INFO.txt file with forensic metadata.
+func (c Commit) WriteMetadataFile(destPath string) error {
+	metadataPath := filepath.Join(destPath, "COMMIT_INFO.txt")
+	f, err := os.Create(metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to create metadata file: %w", err)
 	}
+	defer f.Close()
+
+	if err := metadataTemplate.Execute(f, c); err != nil {
+		return fmt.Errorf("failed to execute metadata template: %w", err)
+	}
+
+	return nil
 }
 
-// formatIndex formats an index number with leading zeros for proper sorting.
-func formatIndex(index int) string {
-	if index < 10 {
-		return "00" + itoa(index)
-	} else if index < 100 {
-		return "0" + itoa(index)
+func formatGPGStatus(status string) string {
+	switch status {
+	case "G":
+		return "Valid signature (good)"
+	case "B":
+		return "Bad signature"
+	case "U":
+		return "Valid signature, unknown key"
+	case "X":
+		return "Valid signature, expired"
+	case "Y":
+		return "Valid signature, expired key"
+	case "R":
+		return "Valid signature, revoked key"
+	case "E":
+		return "Cannot verify (missing key)"
+	case "N", "":
+		return "Not signed"
+	default:
+		return "Unknown (" + status + ")"
 	}
-	return itoa(index)
-}
-
-// itoa converts an integer to string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	result := ""
-	for n > 0 {
-		result = string(rune('0'+n%10)) + result
-		n /= 10
-	}
-	return result
 }
