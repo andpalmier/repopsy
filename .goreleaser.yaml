@@ -63,7 +63,7 @@ brews:
     test: |
       system "#{bin}/repopsy --version"
 
- dockers:
+dockers:
   - image_templates:
       - "ghcr.io/andpalmier/repopsy:{{ .Version }}-amd64"
       - "ghcr.io/andpalmier/repopsy:latest-amd64"
