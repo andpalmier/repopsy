@@ -4,6 +4,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -18,8 +19,8 @@ type CommitStats struct {
 }
 
 // GetCommitStats returns statistics about the changes in a commit
-func (r *Repository) GetCommitStats(hash string) (CommitStats, error) {
-	cmd := exec.Command("git", "show", "--numstat", "--format=", hash)
+func (r *Repository) GetCommitStats(ctx context.Context, hash string) (CommitStats, error) {
+	cmd := exec.CommandContext(ctx, "git", "show", "--numstat", "--format=", hash)
 	cmd.Dir = r.Path
 
 	output, err := cmd.Output()
@@ -59,13 +60,13 @@ func (r *Repository) GetCommitStats(hash string) (CommitStats, error) {
 }
 
 // GetCommitFullMessage retrieves the full commit message
-func (r *Repository) GetCommitFullMessage(hash string) (string, error) {
-	return r.runGitCommand("log", "-1", "--format=%B", hash)
+func (r *Repository) GetCommitFullMessage(ctx context.Context, hash string) (string, error) {
+	return r.runGitCommand(ctx, "log", "-1", "--format=%B", hash)
 }
 
 // GetCommitParents returns the parent commit hashes.
-func (r *Repository) GetCommitParents(hash string) ([]string, error) {
-	parentStr, err := r.runGitCommand("log", "-1", "--format=%P", hash)
+func (r *Repository) GetCommitParents(ctx context.Context, hash string) ([]string, error) {
+	parentStr, err := r.runGitCommand(ctx, "log", "-1", "--format=%P", hash)
 	if err != nil {
 		return nil, err
 	}
@@ -76,8 +77,8 @@ func (r *Repository) GetCommitParents(hash string) ([]string, error) {
 }
 
 // GetFileDiff returns the diff for a specific commit
-func (r *Repository) GetFileDiff(hash string) (string, error) {
-	output, err := r.runGitCommand("diff-tree", "-p", "--root", hash)
+func (r *Repository) GetFileDiff(ctx context.Context, hash string) (string, error) {
+	output, err := r.runGitCommand(ctx, "diff-tree", "-p", "--root", hash)
 	if err != nil {
 		return "", err
 	}

@@ -63,7 +63,7 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 	yellow := color.New(color.FgYellow, color.Bold).SprintFunc()
 
 	// List all branches
-	branches, err := repo.ListBranches()
+	branches, err := repo.ListBranches(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list branches: %w", err)
 	}
@@ -73,7 +73,7 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 	}
 
 	// Display warning about time and memory
-	fmt.Fprintf(os.Stderr, "%s Extracting from %d branches - this may take significant time and memory!\n\n", yellow("⚠"), len(branches))
+	fmt.Fprintf(os.Stderr, "%s Extracting from %d branches - this may take some time and memory!\n\n", yellow("⚠"), len(branches))
 
 	var allResults []extractor.Result
 	var extractionErr error
@@ -89,7 +89,7 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 		fmt.Fprintf(os.Stderr, "Branch [%d/%d]: %s\n", i+1, len(branches), branch)
 
 		// List commits for this branch
-		commits, err := repo.ListCommits(git.ListOptions{
+		commits, err := repo.ListCommits(ctx, git.ListOptions{
 			Branch:  branch,
 			Limit:   cfg.Limit,
 			Reverse: true,
@@ -121,7 +121,7 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 	}
 
 	// Print summary
-	printSummary(allResults, outDir, cfg, extractionErr)
+	printSummary(allResults, outDir, cfg)
 
 	return extractionErr
 }
@@ -129,7 +129,7 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 // runSingleBranch extracts commits from a single branch
 func runSingleBranch(ctx context.Context, repo *git.Repository, outDir string, cfg Config) error {
 	// List commits
-	commits, err := repo.ListCommits(git.ListOptions{
+	commits, err := repo.ListCommits(ctx, git.ListOptions{
 		Branch:  cfg.Branch,
 		Limit:   cfg.Limit,
 		Reverse: true,
@@ -154,7 +154,7 @@ func runSingleBranch(ctx context.Context, repo *git.Repository, outDir string, c
 	results, err := ext.Run(ctx, commits)
 
 	// Print summary
-	printSummary(results, outDir, cfg, err)
+	printSummary(results, outDir, cfg)
 
 	return err
 }
@@ -191,7 +191,7 @@ func printHeader(repo *git.Repository, outDir string, cfg Config) {
 }
 
 // printSummary displays the extraction results
-func printSummary(results []extractor.Result, outDir string, cfg Config, err error) {
+func printSummary(results []extractor.Result, outDir string, cfg Config) {
 	fmt.Fprintln(os.Stderr, "")
 
 	// Count successes and failures

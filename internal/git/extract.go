@@ -4,6 +4,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,36 +12,36 @@ import (
 )
 
 // ExtractCommit extracts the contents of a commit to the specified destination path
-func (r *Repository) ExtractCommit(hash, destPath string) error {
+func (r *Repository) ExtractCommit(ctx context.Context, hash, destPath string) error {
 	if err := os.MkdirAll(destPath, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 	// Use 'git archive' piped to 'tar' to extract the commit
 	// This avoids checking out the commit into the working directory
-	return r.runArchiveToTar([]string{"archive", "--format=tar", hash}, destPath)
+	return r.runArchiveToTar(ctx, []string{"archive", "--format=tar", hash}, destPath)
 }
 
 // ExtractCommitExcludingBinaries extracts commit contents, excluding binary files
-func (r *Repository) ExtractCommitExcludingBinaries(hash, destPath string, excludeBinaries bool) error {
+func (r *Repository) ExtractCommitExcludingBinaries(ctx context.Context, hash, destPath string, excludeBinaries bool) error {
 	if !excludeBinaries {
-		return r.ExtractCommit(hash, destPath)
+		return r.ExtractCommit(ctx, hash, destPath)
 	}
 
 	// Get all files in this commit
-	allFiles, err := r.listFiles(hash)
+	allFiles, err := r.listFiles(ctx, hash)
 	if err != nil {
-		return r.ExtractCommit(hash, destPath)
+		return r.ExtractCommit(ctx, hash, destPath)
 	}
 
 	// Get binary files
-	binaryFiles, err := r.listBinaryFiles(hash)
+	binaryFiles, err := r.listBinaryFiles(ctx, hash)
 	if err != nil {
-		return r.ExtractCommit(hash, destPath)
+		return r.ExtractCommit(ctx, hash, destPath)
 	}
 
 	// If no binaries, standard extraction is faster
 	if len(binaryFiles) == 0 {
-		return r.ExtractCommit(hash, destPath)
+		return r.ExtractCommit(ctx, hash, destPath)
 	}
 
 	// Filter to only non-binary files
@@ -64,18 +65,18 @@ func (r *Repository) ExtractCommitExcludingBinaries(hash, destPath string, exclu
 	archiveArgs := []string{"archive", "--format=tar", hash, "--"}
 	archiveArgs = append(archiveArgs, textFiles...)
 
-	return r.runArchiveToTar(archiveArgs, destPath)
+	return r.runArchiveToTar(ctx, archiveArgs, destPath)
 }
 
 // runArchiveToTar executes git archive piped to tar for extraction
-func (r *Repository) runArchiveToTar(archiveArgs []string, destPath string) error {
-	archiveCmd := exec.Command("git", archiveArgs...)
+func (r *Repository) runArchiveToTar(ctx context.Context, archiveArgs []string, destPath string) error {
+	archiveCmd := exec.CommandContext(ctx, "git", archiveArgs...)
 	archiveCmd.Dir = r.Path
 
 	// tar -x: extract
 	// -f -: from stdin
 	// -C destPath: change directory to destination before extracting
-	tarCmd := exec.Command("tar", "-xf", "-", "-C", destPath)
+	tarCmd := exec.CommandContext(ctx, "tar", "-xf", "-", "-C", destPath)
 
 	pipe, err := archiveCmd.StdoutPipe()
 	if err != nil {
@@ -108,8 +109,8 @@ func (r *Repository) runArchiveToTar(archiveArgs []string, destPath string) erro
 }
 
 // listFiles returns all files in a commit
-func (r *Repository) listFiles(hash string) ([]string, error) {
-	cmd := exec.Command("git", "ls-tree", "-r", "--name-only", hash)
+func (r *Repository) listFiles(ctx context.Context, hash string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-tree", "-r", "--name-only", hash)
 	cmd.Dir = r.Path
 
 	output, err := cmd.Output()
@@ -128,8 +129,8 @@ func (r *Repository) listFiles(hash string) ([]string, error) {
 }
 
 // listBinaryFiles returns a set of file paths that are binary in the given commit
-func (r *Repository) listBinaryFiles(hash string) (map[string]bool, error) {
-	cmd := exec.Command("git", "diff-tree", "--numstat", "-r", "--root", hash)
+func (r *Repository) listBinaryFiles(ctx context.Context, hash string) (map[string]bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff-tree", "--numstat", "-r", "--root", hash)
 	cmd.Dir = r.Path
 
 	output, err := cmd.Output()

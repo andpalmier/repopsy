@@ -2,6 +2,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,8 +60,8 @@ func Open(path string) (*Repository, error) {
 }
 
 // runGitCommand executes a git command and returns trimmed output
-func (r *Repository) runGitCommand(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+func (r *Repository) runGitCommand(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = r.Path
 	output, err := cmd.Output()
 	if err != nil {
@@ -73,8 +74,8 @@ func (r *Repository) runGitCommand(args ...string) (string, error) {
 }
 
 // GetCurrentBranch returns the name of the current branch
-func (r *Repository) GetCurrentBranch() string {
-	branch, err := r.runGitCommand("rev-parse", "--abbrev-ref", "HEAD")
+func (r *Repository) GetCurrentBranch(ctx context.Context) string {
+	branch, err := r.runGitCommand(ctx, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
 		return "HEAD"
 	}
@@ -82,8 +83,8 @@ func (r *Repository) GetCurrentBranch() string {
 }
 
 // GetRemoteURL returns the origin remote URL
-func (r *Repository) GetRemoteURL() string {
-	url, err := r.runGitCommand("remote", "get-url", "origin")
+func (r *Repository) GetRemoteURL(ctx context.Context) string {
+	url, err := r.runGitCommand(ctx, "remote", "get-url", "origin")
 	if err != nil {
 		return ""
 	}
@@ -91,8 +92,8 @@ func (r *Repository) GetRemoteURL() string {
 }
 
 // ListBranches returns all local branch names in the repository
-func (r *Repository) ListBranches() ([]string, error) {
-	output, err := r.runGitCommand("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+func (r *Repository) ListBranches(ctx context.Context) ([]string, error) {
+	output, err := r.runGitCommand(ctx, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}

@@ -1,4 +1,3 @@
-// Package extractor provides concurrent commit extraction functionality.
 package extractor
 
 import (
@@ -120,7 +119,7 @@ func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- 
 				return
 			}
 
-			result := e.extractOne(j.commit, j.index)
+			result := e.extractOne(ctx, j.commit, j.index)
 			results <- result
 
 			if result.Error != nil {
@@ -133,22 +132,22 @@ func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- 
 }
 
 // extractOne extracts a single commit and returns the result
-func (e *Extractor) extractOne(commit git.Commit, index int) Result {
+func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int) Result {
 	// Format: YYYYMMDD_HHMMSS_hash (e.g., 20231205_143022_abc1234)
 	timestamp := commit.AuthorDate.Format("20060102_150405")
 	folderName := fmt.Sprintf("%s_%s", timestamp, commit.ShortHash)
 	outputPath := filepath.Join(e.config.OutputDir, folderName)
 
 	// Extract commit contents
-	err := e.repo.ExtractCommit(commit.Hash, outputPath)
+	err := e.repo.ExtractCommit(ctx, commit.Hash, outputPath)
 
 	// Always write metadata if extraction succeeded
 	if err == nil {
-		if fullMsg, msgErr := e.repo.GetCommitFullMessage(commit.Hash); msgErr == nil {
+		if fullMsg, msgErr := e.repo.GetCommitFullMessage(ctx, commit.Hash); msgErr == nil {
 			commit.FullMessage = fullMsg
 		}
 
-		if stats, statsErr := e.repo.GetCommitStats(commit.Hash); statsErr == nil {
+		if stats, statsErr := e.repo.GetCommitStats(ctx, commit.Hash); statsErr == nil {
 			commit.FilesChanged = stats.FilesChanged
 			commit.Insertions = stats.Insertions
 			commit.Deletions = stats.Deletions

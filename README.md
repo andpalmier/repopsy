@@ -135,3 +135,55 @@ When extracting a single branch:
 │   └── ... (source files)
 └── 20231205_150000_def5678/
 ```
+
+## Commit Metadata
+
+Each exploded folder includes a `COMMIT_INFO.txt` file containing metadata about the commi: this includes verification status (GPG), timestamps, and authorship details.
+
+**Example `COMMIT_INFO.txt` content:**
+
+```text
+COMMIT INFORMATION
+===========================
+
+Hash:           8f6a2b1c4d5e...
+Short Hash:     8f6a2b1
+
+AUTHOR (who wrote the code)
+---------------------------
+Name:           Alice Dev
+Email:          alice@example.com
+Date:           2023-12-05T14:30:22Z
+Timestamp:      1701786622
+
+COMMITTER (who applied the commit)
+----------------------------------
+Name:           Bob Ops
+Email:          bob@example.com
+Date:           2023-12-05T15:00:00Z
+Timestamp:      1701788400
+
+VERIFICATION
+------------
+GPG Signature:  Valid signature (good)
+
+LINEAGE
+-------
+Parents:        7e5d1c2b... 
+
+CHANGE STATISTICS
+-----------------
+Files Changed:  5
+Insertions:     +120
+Deletions:      -34
+
+COMMIT MESSAGE
+--------------
+Subject:
+Fix critical security vulnerability in extraction logic
+
+Full Message:
+Fix critical security vulnerability in extraction logic
+
+This patch addresses CVE-2023-XXXX by sanitizing input paths...
+```

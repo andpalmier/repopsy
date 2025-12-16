@@ -4,6 +4,7 @@ package git
 import (
 	"bufio"
 	"bytes"
+	"context" // added context
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -11,18 +12,18 @@ import (
 	"time"
 )
 
-// ListOptions configures how commits are listed from the repository.
+// ListOptions configures how commits are listed from the repository
 type ListOptions struct {
 	Branch  string
 	Limit   int
 	Reverse bool
 }
 
-// ListCommits returns a list of commits based on the provided options.
-func (r *Repository) ListCommits(opts ListOptions) ([]Commit, error) {
+// ListCommits returns a list of commits based on the provided options
+func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) ([]Commit, error) {
 	args := []string{
 		"log",
-		"--format=%H|%h|%an|%ae|%at|%cn|%ce|%ct|%G?|%P|%s",
+		"--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%cn%x00%ce%x00%ct%x00%G?%x00%P%x00%s",
 	}
 
 	if opts.Limit > 0 {
@@ -37,7 +38,7 @@ func (r *Repository) ListCommits(opts ListOptions) ([]Commit, error) {
 		args = append(args, opts.Branch)
 	}
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = r.Path
 
 	output, err := cmd.Output()
@@ -70,9 +71,9 @@ func (r *Repository) ListCommits(opts ListOptions) ([]Commit, error) {
 	return commits, nil
 }
 
-// parseCommitLine parses a single line of git log output.
+// parseCommitLine parses a single line of git log output
 func parseCommitLine(line string) (Commit, error) {
-	parts := strings.SplitN(line, "|", 11)
+	parts := strings.SplitN(line, "\x00", 11)
 	if len(parts) < 11 {
 		return Commit{}, fmt.Errorf("invalid commit line format: %s", line)
 	}
@@ -106,14 +107,14 @@ func parseCommitLine(line string) (Commit, error) {
 	}, nil
 }
 
-// CommitCount returns the total number of commits in the repository.
-func (r *Repository) CommitCount(branch string) (int, error) {
+// CommitCount returns the total number of commits in the repository
+func (r *Repository) CommitCount(ctx context.Context, branch string) (int, error) {
 	ref := branch
 	if ref == "" {
 		ref = "HEAD"
 	}
 
-	output, err := r.runGitCommand("rev-list", "--count", ref)
+	output, err := r.runGitCommand(ctx, "rev-list", "--count", ref)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count commits: %w", err)
 	}
