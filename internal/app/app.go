@@ -218,5 +218,5 @@ func printSummary(results []extractor.Result, outDir string, cfg Config) {
 	}
 
 	green := color.New(color.FgGreen, color.Bold).SprintFunc()
-	fmt.Fprintf(os.Stderr, "\n%s Output: %s\n", green("📁"), outDir)
+	fmt.Fprintf(os.Stderr, "\n%s Output: %s\n", green("➜"), outDir)
 }
