@@ -7,6 +7,10 @@
     <a href="https://x.com/intent/follow?screen_name=andpalmier"><img src="https://img.shields.io/twitter/follow/andpalmier?style=social&logo=x" alt="follow on X"></a>
 </p>
 
+<p align="center">
+  <img src="repopsy_demo.gif" alt="Repopsy Demo">
+</p>
+
 **Repopsy** stands for **Rep**ository aut**opsy**.
 
 **Repopsy** is an OSINT tool to gather information on a git repository, it takes a git repo and *"explodes it"*: creating a snapshot folder for every commit, enabling easy comparison, analysis, and archival of code evolution.
