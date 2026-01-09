@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Build Docker image
-        run: docker build -t gitxplode:test .
+        run: docker build -t repopsy:test .
 
       - name: Test Docker image
-        run: docker run --rm gitxplode:test --help
+        run: docker run --rm repopsy:test --help
