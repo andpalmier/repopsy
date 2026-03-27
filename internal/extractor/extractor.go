@@ -8,15 +8,17 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/andpalmier/repopsy/internal/config"
 	"github.com/andpalmier/repopsy/internal/git"
 	"github.com/andpalmier/repopsy/internal/progress"
 )
 
-// Config configures the extraction process
+// Config configures the extraction process.
 type Config struct {
-	OutputDir string
-	Workers   int
-	Verbose   bool
+	OutputDir  string
+	Workers    int
+	Verbose    bool
+	BufferSize int // Scanner buffer size in bytes (default: 1MB)
 }
 
 // Result represents the outcome of a single commit
@@ -33,10 +35,14 @@ type Extractor struct {
 	config Config
 }
 
-// New creates a new Extractor with the given configuration
+// New creates a new Extractor with the given configuration.
 func New(repo *git.Repository, cfg Config) *Extractor {
 	if cfg.Workers <= 0 {
 		cfg.Workers = runtime.NumCPU()
+	}
+	// Default buffer size: 1MB (suitable for repos with many files per commit)
+	if cfg.BufferSize < config.MinBufferSize {
+		cfg.BufferSize = config.DefaultBufferSize
 	}
 	return &Extractor{repo: repo, config: cfg}
 }
