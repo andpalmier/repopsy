@@ -89,10 +89,11 @@ repopsy .
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o`, `--output` | Output directory | `./<repo-name>-exploded` |
-| `-w`, `--workers` | Number of parallel workers | Number of CPUs |
+| `-w`, `--workers` | Number of parallel workers (max 32) | Number of CPUs |
 | `-n`, `--limit` | Maximum number of commits to extract | 0 (all) |
 | `-b`, `--branch` | Branch to extract from | all branches |
 | `-v`, `--verbose` | Show detailed output per commit | false |
+| `-h`, `--help` | Show help message | false |
 | `--version` | Show version information | false |
 
 ### Examples
@@ -113,6 +114,12 @@ Verbose output:
 
 ```bash
 repopsy -v .
+```
+
+Extract with 8 workers:
+
+```bash
+repopsy -w 8 /path/to/repo
 ```
 
 ## Output Structure
