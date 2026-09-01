@@ -17,11 +17,16 @@
 
 How It Works:
 
-1. Validates the `git` repo
-2. Lists commits
+1. Resolves the path to its repository root and validates it
+2. Lists commits, gathering every metadata field in a single `git log`
 3. Creates worker goroutines
 4. Each worker uses `git archive | tar -x` for efficient extraction
 5. Writes metadata to each folder in `COMMIT_INFO.txt`
+
+Any path inside a repository names the repository itself, so `repopsy .` behaves
+the same from any subdirectory. Bare repositories are supported.
+
+Requires `git` 2.31 or newer.
 
 ## Installation
 
@@ -89,9 +94,9 @@ repopsy .
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o`, `--output` | Output directory | `./<repo-name>-exploded` |
-| `-w`, `--workers` | Number of parallel workers (max 32) | Number of CPUs |
+| `-w`, `--workers` | Number of parallel workers, per branch (max 32) | CPUs, capped at 32 |
 | `-n`, `--limit` | Maximum number of commits to extract | 0 (all) |
-| `-b`, `--branch` | Branch to extract from | all branches |
+| `-b`, `--branch` | Branch to extract from | all local branches |
 | `-v`, `--verbose` | Show detailed output per commit | false |
 | `-h`, `--help` | Show help message | false |
 | `--version` | Show version information | false |
@@ -124,7 +129,9 @@ repopsy -w 8 /path/to/repo
 
 ## Output Structure
 
-When extracting all branches:
+When extracting all branches, each branch name becomes a directory path. A
+branch containing `/` nests, mirroring its ref path:
+
 ```
 <repo>-exploded/
 ├── main/
@@ -132,11 +139,16 @@ When extracting all branches:
 │   │   ├── COMMIT_INFO.txt
 │   │   └── ... (source files)
 │   └── 20231205_150000_def5678/
-├── feature_branch/
-│   └── ...
+├── feature/
+│   └── login/                    <- branch "feature/login"
+│       └── ...
 └── develop/
     └── ...
 ```
+
+Nesting rather than flattening `/` to `_` means `feature/login` and
+`feature_login` stay distinct. Git already refuses to create a branch `main/x`
+while `main` exists, so no two branches can claim the same directory.
 
 When extracting a single branch:
 ```
@@ -147,9 +159,27 @@ When extracting a single branch:
 └── 20231205_150000_def5678/
 ```
 
+## Known Limitations
+
+- **Branch names and Windows paths.** Some ref names are legal in git but cannot
+  be directory names on Windows: reserved device names (`aux`, `CON`, `NUL`,
+  `COM1`…) and the characters `<`, `>`, `"`, `|`. Extracting all branches from a
+  repository containing such a branch will fail on Windows. Linux and macOS are
+  unaffected.
+- **"All branches" means local branches.** Only `refs/heads/` is listed;
+  remote-tracking refs and tags are not extracted. On a fresh clone that is
+  usually a single branch — fetch or check out the branches you want first, or
+  pass `-b`.
+
 ## Commit Metadata
 
-Each exploded folder includes a `COMMIT_INFO.txt` file containing metadata about the commi: this includes verification status (GPG), timestamps, and authorship details.
+Each exploded folder includes a `COMMIT_INFO.txt` file containing metadata about
+the commit: this includes verification status (GPG), timestamps, and authorship
+details.
+
+Change statistics are measured against the commit's first parent. A merge commit
+is measured the same way, so changes brought in from the other side of the merge
+are not counted twice.
 
 **Example `COMMIT_INFO.txt` content:**
 
