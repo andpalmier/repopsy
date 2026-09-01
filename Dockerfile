@@ -6,7 +6,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w" -o repopsy .
 
-FROM alpine:3.23
+FROM alpine:3.24
 RUN apk add --no-cache git
 RUN adduser -D -u 1000 repopsy
 WORKDIR /data
