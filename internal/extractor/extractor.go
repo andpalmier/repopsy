@@ -126,8 +126,11 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 
 	// The commit already carries its message body and change statistics from
 	// ListCommits, so no further git calls are needed here.
-	err := e.repo.ExtractCommit(ctx, commit.Hash, snapshotPath)
+	extracted, err := e.repo.ExtractCommit(ctx, commit.Hash, snapshotPath)
 	if err == nil {
+		// Only the tree listing knows which gitlinks the commit contains.
+		commit.Submodules = extracted.Submodules
+
 		if metaErr := writeMetadataFile(snapshotPath, commit); metaErr != nil {
 			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
 		}

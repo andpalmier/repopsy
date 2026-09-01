@@ -125,7 +125,14 @@ CHANGED FILES
 -------------
 {{if .Files}}{{range .Files}}{{fileLine .}}
 {{end}}{{else}}(no file changes recorded)
-{{end}}
+{{end}}{{if .Submodules}}
+SUBMODULES
+----------
+git stores only a pointer to another repository, so this snapshot does not
+contain the content below.
+
+{{range .Submodules}}{{.Path}}  ->  {{.Commit}}
+{{end}}{{end}}
 COMMIT MESSAGE
 --------------
 Subject:

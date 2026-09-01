@@ -94,7 +94,7 @@ func TestExtractCommit(t *testing.T) {
 	hash := b.commit("everything")
 
 	dest := filepath.Join(t.TempDir(), "snap")
-	if err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
+	if _, err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
 		t.Fatalf("ExtractCommit: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestExtractCommitCreatesDestination(t *testing.T) {
 
 	// Two levels that do not exist yet.
 	dest := filepath.Join(t.TempDir(), "a", "b", "snap")
-	if err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
+	if _, err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
 		t.Fatalf("ExtractCommit: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "f.txt")); err != nil {
@@ -156,12 +156,12 @@ func TestExtractCommitUnknownHash(t *testing.T) {
 	b.commit("one")
 
 	dest := filepath.Join(t.TempDir(), "snap")
-	err := b.open().ExtractCommit(context.Background(), "0000000000000000000000000000000000000000", dest)
+	_, err := b.open().ExtractCommit(context.Background(), "0000000000000000000000000000000000000000", dest)
 	if err == nil {
 		t.Fatal("expected an error for an unknown hash")
 	}
 	// git's own diagnosis is the useful part, so it must reach the caller.
-	if !strings.Contains(err.Error(), "archive") && !strings.Contains(err.Error(), "not a valid") {
+	if !strings.Contains(err.Error(), "ls-tree") && !strings.Contains(err.Error(), "Not a valid") {
 		t.Errorf("error does not carry git's diagnosis: %v", err)
 	}
 }
@@ -175,7 +175,7 @@ func TestExtractCommitCancelledContext(t *testing.T) {
 	cancel()
 
 	dest := filepath.Join(t.TempDir(), "snap")
-	if err := b.open().ExtractCommit(ctx, hash, dest); err == nil {
+	if _, err := b.open().ExtractCommit(ctx, hash, dest); err == nil {
 		t.Error("expected an error from a cancelled context")
 	}
 }
@@ -188,7 +188,7 @@ func TestExtractCommitEmptyCommit(t *testing.T) {
 	hash := b.git("rev-parse", "HEAD")
 
 	dest := filepath.Join(t.TempDir(), "snap")
-	if err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
+	if _, err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
 		t.Fatalf("ExtractCommit: %v", err)
 	}
 	// An empty commit still has the tree of its parent.
@@ -197,15 +197,13 @@ func TestExtractCommitEmptyCommit(t *testing.T) {
 	}
 }
 
-// TestExtractCommitHonoursExportIgnore pins a known hazard: a repository can
-// withhold files from its own snapshot via .gitattributes export-ignore, so the
-// extracted tree disagrees with the commit's recorded file list. git archive
-// offers no way to override it — pathspecs and --worktree-attributes both still
-// honour it, and there is no --no-export-ignore.
-//
-// This test asserts the CURRENT behaviour so the gap is visible. It is inverted
-// when extraction stops going through git archive.
-func TestExtractCommitHonoursExportIgnore(t *testing.T) {
+// TestExtractIgnoresExportIgnore is the inversion of a test that used to assert
+// the opposite. A repository could withhold files from its own snapshot with
+// .gitattributes export-ignore, because git archive honours it and offers no way
+// to override it. Reading the tree with ls-tree and cat-file bypasses attributes
+// entirely, so the subject of an investigation no longer chooses what is
+// collected. See docs/adr/0005.
+func TestExtractIgnoresExportIgnore(t *testing.T) {
 	b := newRepo(t)
 	b.write("normal.txt", "public\n", 0o644)
 	b.write("secret.txt", "withheld\n", 0o644)
@@ -214,11 +212,11 @@ func TestExtractCommitHonoursExportIgnore(t *testing.T) {
 
 	repo := b.open()
 	dest := filepath.Join(t.TempDir(), "snap")
-	if err := repo.ExtractCommit(context.Background(), hash, dest); err != nil {
+	if _, err := repo.ExtractCommit(context.Background(), hash, dest); err != nil {
 		t.Fatalf("ExtractCommit: %v", err)
 	}
 
-	// The commit records the file...
+	// The commit records the file, and now so does the snapshot.
 	commits, err := repo.ListCommits(context.Background(), ListOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -233,13 +231,61 @@ func TestExtractCommitHonoursExportIgnore(t *testing.T) {
 		t.Error("secret.txt is missing from the commit's recorded file list")
 	}
 
-	// ...but it is absent from the extracted tree.
-	if _, err := os.Stat(filepath.Join(dest, "secret.txt")); err == nil {
-		t.Error("secret.txt was extracted: the export-ignore hazard is fixed, " +
-			"invert this test")
+	content, err := os.ReadFile(filepath.Join(dest, "secret.txt"))
+	if err != nil {
+		t.Fatalf("secret.txt was withheld from the snapshot: %v", err)
+	}
+	if string(content) != "withheld\n" {
+		t.Errorf("secret.txt = %q", content)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "normal.txt")); err != nil {
 		t.Errorf("normal.txt should still be extracted: %v", err)
+	}
+}
+
+func TestExtractRecordsSubmodulePointers(t *testing.T) {
+	// A second repository to point at.
+	inner := newRepo(t)
+	inner.write("inner.txt", "inner\n", 0o644)
+	innerHash := inner.commit("inner one")
+
+	b := newRepo(t)
+	b.write("outer.txt", "outer\n", 0o644)
+	b.commit("outer one")
+	b.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", inner.dir, "sub")
+	hash := b.commit("add submodule")
+
+	dest := filepath.Join(t.TempDir(), "snap")
+	result, err := b.open().ExtractCommit(context.Background(), hash, dest)
+	if err != nil {
+		t.Fatalf("ExtractCommit: %v", err)
+	}
+
+	if len(result.Submodules) != 1 {
+		t.Fatalf("got %d submodules, want 1: %+v", len(result.Submodules), result.Submodules)
+	}
+	sub := result.Submodules[0]
+	if sub.Path != "sub" {
+		t.Errorf("submodule path = %q, want sub", sub.Path)
+	}
+	if sub.Commit != innerHash {
+		t.Errorf("submodule commit = %q, want %q", sub.Commit, innerHash)
+	}
+
+	// The pointer is recorded; the content genuinely is not there.
+	if entries, err := os.ReadDir(filepath.Join(dest, "sub")); err == nil && len(entries) > 0 {
+		t.Errorf("submodule content unexpectedly present: %v", entries)
+	}
+}
+
+func TestExtractRefusesEscapingPaths(t *testing.T) {
+	// git will not create such an entry, so the guard is checked directly.
+	root := t.TempDir()
+	if _, err := safeJoin(root, "../escape.txt"); err == nil {
+		t.Error("expected ../escape.txt to be refused")
+	}
+	if _, err := safeJoin(root, "ok/inside.txt"); err != nil {
+		t.Errorf("a normal path was refused: %v", err)
 	}
 }
 

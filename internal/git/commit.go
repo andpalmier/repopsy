@@ -43,6 +43,10 @@ type Commit struct {
 	FilesChanged int
 	Insertions   int
 	Deletions    int
+
+	// Submodules present in this commit's tree. Filled in at extraction time,
+	// since the commit log describes changes rather than the whole tree.
+	Submodules []Submodule
 }
 
 // Signature holds what git can tell us about a commit's GPG signature. The
