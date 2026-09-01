@@ -170,27 +170,37 @@ branch containing `/` nests, mirroring its ref path:
 ├── TAGS.txt                      <- tags and their attestations
 ├── IDENTITIES.txt                <- who appears in the history
 ├── REPOSITORY.txt                <- local config and installed hooks
-├── main/
-│   ├── 20231205_143022_abc1234/
-│   │   ├── COMMIT_INFO.txt
-│   │   ├── SHA256SUMS
-│   │   └── ... (source files)
-│   └── 20231205_150000_def5678/
-├── feature/
-│   └── login/                    <- branch "feature/login"
-│       └── ...
-├── develop/
-│   └── ...
-└── HEAD/                         <- only with --include-rewritten:
-    └── ...                          work abandoned on a detached head
+└── refs/
+    ├── main/
+    │   ├── 20231205_143022_abc1234/
+    │   │   ├── COMMIT_INFO.txt   <- the commit's record
+    │   │   ├── SHA256SUMS        <- the integrity record
+    │   │   └── tree/             <- the commit's working tree
+    │   │       └── ...
+    │   └── 20231205_150000_def5678/
+    ├── feature/
+    │   └── login/                <- branch "feature/login"
+    │       └── ...
+    ├── develop/
+    │   └── ...
+    └── HEAD/                     <- only with --include-rewritten:
+        └── ...                      work abandoned on a detached head
 ```
+
+**Two separations, both deliberate.** Repository content lives under `tree/`,
+never beside the records, and ref directories live under `refs/`, never beside
+the root records. A commit may legitimately contain a file called
+`COMMIT_INFO.txt`, and a branch may legitimately be called `EXTRACTION.txt` —
+without the separation, repopsy would overwrite the first and be displaced by the
+second, destroying or hiding evidence in both cases. A repository containing its
+own `tree/` or a branch called `refs` simply nests one level deeper.
 
 A commit reachable from several branches is extracted under each of them. That
 duplication is deliberate: each branch directory is a complete account of that
 branch's history, rather than a set of pointers into a shared pool.
 
-`HEAD/` appears only with `--include-rewritten`, and holds commits that HEAD's
-reflog remembers but no branch reaches — typically work committed on a detached
+`refs/HEAD/` appears only with `--include-rewritten`, and holds commits that
+HEAD's reflog remembers but no branch reaches — typically work committed on a detached
 head and then abandoned. It cannot collide with a branch directory, because git
 refuses `HEAD` as a branch name.
 
@@ -206,9 +216,13 @@ When extracting a single branch:
 ├── 20231205_143022_abc1234/
 │   ├── COMMIT_INFO.txt
 │   ├── SHA256SUMS
-│   └── ... (source files)
+│   └── tree/
+│       └── ...
 └── 20231205_150000_def5678/
 ```
+
+Naming a branch means no `refs/` level either: snapshot directory names are
+generated from a timestamp and a hash, so they cannot collide with a record.
 
 Snapshot directory names are timestamped in **the offset the commit itself
 records**, never the offset of the machine running repopsy, and the short hash is
@@ -237,7 +251,7 @@ and whatever the examined repository is configured to do.
   not transferred by clone, so `--include-rewritten` finds nothing in a bare
   mirror or a fresh clone. Reflog entries also expire (`gc.reflogExpire`,
   90 days by default).
-- **Detached-head recovery needs all-branches mode.** `HEAD/` is only produced
+- **Detached-head recovery needs all-branches mode.** `refs/HEAD/` is only produced
   when no `-b` is given: naming one branch means that branch's history. Combine
   `--include-rewritten` with no `-b` to recover everything the reflogs remember.
 - **Submodule content is not captured.** git stores only a pointer; the pointer
@@ -286,9 +300,12 @@ Every snapshot contains an **integrity record**, `SHA256SUMS`, listing the
 SHA-256 of each extracted file in the format `sha256sum -c` reads:
 
 ```bash
-cd <repo>-exploded/main/20231205_143022_abc1234
+cd <repo>-exploded/refs/main/20231205_143022_abc1234
 sha256sum -c SHA256SUMS
 ```
+
+Paths in the record are relative to the snapshot directory, where the record
+itself lives, so verification runs from there with no extra flags.
 
 Together with `EXTRACTION.txt` this closes the chain of custody: the manifest
 says how the snapshots were produced, and the checksums show they have not been

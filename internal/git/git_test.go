@@ -20,10 +20,11 @@ func setupTestRepo(t *testing.T) *Repository {
 func TestListCommits(t *testing.T) {
 	repo := setupTestRepo(t)
 
-	commits, err := repo.ListCommits(context.Background(), ListOptions{})
+	listed, err := repo.ListCommits(context.Background(), ListOptions{})
 	if err != nil {
 		t.Fatalf("ListCommits failed: %v", err)
 	}
+	commits := listed.Commits
 
 	if len(commits) != 2 {
 		t.Errorf("expected 2 commits, got %d", len(commits))

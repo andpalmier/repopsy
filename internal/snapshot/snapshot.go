@@ -24,6 +24,23 @@ const (
 	// ChecksumFilename is the integrity record written inside every snapshot.
 	ChecksumFilename = "SHA256SUMS"
 
+	// TreeDir holds a snapshot's extracted content, one level below the
+	// snapshot's own records.
+	//
+	// Repository content and repopsy's records must never share a directory: a
+	// commit may legitimately contain a file called COMMIT_INFO.txt, and writing
+	// a record over it would destroy the evidence being collected. Separating
+	// them makes that impossible rather than unlikely — a commit containing its
+	// own "tree" directory simply nests one level deeper.
+	TreeDir = "tree"
+
+	// RefsDir holds the per-ref snapshot trees, one level below the root
+	// records.
+	//
+	// For the same reason: a branch may legitimately be called EXTRACTION.txt,
+	// and its directory would otherwise displace the manifest.
+	RefsDir = "refs"
+
 	// timestampFormat names a snapshot directory: 20231205_143022_abc1234.
 	timestampFormat = "20060102_150405"
 
@@ -39,6 +56,9 @@ const (
 // branches can claim the same directory, and no escaping scheme is needed. An
 // empty branch puts snapshots directly under outDir.
 //
+// Branch-derived directories live under RefsDir so that no ref name can collide
+// with a root record's filename.
+//
 // The timestamp is rendered in the offset the commit itself records, never the
 // offset of the machine running repopsy, so the same repository always explodes
 // into the same directory names.
@@ -48,14 +68,24 @@ const (
 // characters < > " | — still produce unusable directories on Windows. This
 // predates the nesting scheme; see docs/adr/0001.
 func Path(outDir, branch string, c git.Commit) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	parts = append(parts, outDir)
-	for _, segment := range strings.Split(branch, "/") {
-		if segment != "" {
-			parts = append(parts, segment)
+
+	if branch != "" {
+		parts = append(parts, RefsDir)
+		for _, segment := range strings.Split(branch, "/") {
+			if segment != "" {
+				parts = append(parts, segment)
+			}
 		}
 	}
 	return filepath.Join(append(parts, dirName(c))...)
+}
+
+// TreePath is where a snapshot's extracted content goes: one level below the
+// snapshot's own records, so the two can never collide.
+func TreePath(snapshotPath string) string {
+	return filepath.Join(snapshotPath, TreeDir)
 }
 
 // dirName is the snapshot's own directory name, without any parent path.
@@ -74,10 +104,13 @@ func WriteMetadata(w io.Writer, c git.Commit) error {
 
 // WriteChecksums records the SHA-256 of every extracted file, in the format
 // "sha256sum -c" reads, so a reader can verify the snapshot was not altered
-// after extraction. Paths are relative to the snapshot directory.
+// after extraction.
+//
+// Paths are relative to the snapshot directory, which is where this record
+// lives, so verification runs from there without any -C dance.
 func WriteChecksums(w io.Writer, digests []git.FileDigest) error {
 	for _, d := range digests {
-		if _, err := fmt.Fprintf(w, "%s  %s\n", d.SHA256, d.Path); err != nil {
+		if _, err := fmt.Fprintf(w, "%s  %s/%s\n", d.SHA256, TreeDir, d.Path); err != nil {
 			return fmt.Errorf("failed to write checksums: %w", err)
 		}
 	}

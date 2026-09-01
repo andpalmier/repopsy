@@ -2,12 +2,28 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// CommitList is the result of listing commits: the commits themselves, plus any
+// anomaly in the listing that a reader has to be told about.
+type CommitList struct {
+	Commits []Commit
+
+	// Unparsed counts records git emitted that could not be parsed.
+	//
+	// Non-zero means commits are missing from Commits. git permits the record
+	// separator inside a commit message, and a message containing it splits its
+	// record in two so that neither half parses — which is how a commit can be
+	// hidden from a listing. Reporting the count cannot recover the commit, but
+	// it turns a silent omission into a visible anomaly.
+	Unparsed int
+}
 
 // ListOptions selects which commits ListCommits returns, and in what order.
 type ListOptions struct {
@@ -79,7 +95,7 @@ const (
 // hundred bytes, so this is roughly 2 MB at 10k commits and 23 MB at 100k —
 // negligible beside the working tree each snapshot writes to disk. Batch in
 // chunks if that ever stops being true.
-func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) ([]Commit, error) {
+func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) (CommitList, error) {
 	args := []string{
 		"log",
 		"--format=" + logFormat,
@@ -118,26 +134,29 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) ([]Commi
 
 	output, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("git log failed: %s", string(exitErr.Stderr))
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return CommitList{}, fmt.Errorf("git log failed: %s", string(exitErr.Stderr))
 		}
-		return nil, fmt.Errorf("git log failed: %w", err)
+		return CommitList{}, fmt.Errorf("git log failed: %w", err)
 	}
 
 	records := strings.Split(string(output), recordSep)
-	commits := make([]Commit, 0, len(records))
+	list := CommitList{Commits: make([]Commit, 0, len(records))}
 	for _, record := range records {
 		if strings.TrimSpace(record) == "" {
 			continue
 		}
 		commit, err := parseCommitRecord(record)
 		if err != nil {
+			// Counted rather than dropped: see CommitList.Unparsed.
+			list.Unparsed++
 			continue
 		}
-		commits = append(commits, commit)
+		list.Commits = append(list.Commits, commit)
 	}
 
-	return commits, nil
+	return list, nil
 }
 
 // parseCommitRecord parses one record of git log output: the fixed fields
@@ -331,7 +350,7 @@ func (r *Repository) RewrittenCommits(ctx context.Context, ref string, exclude m
 	}
 
 	var rewritten []Commit
-	for _, c := range fromReflog {
+	for _, c := range fromReflog.Commits {
 		if exclude[c.Hash] {
 			continue
 		}

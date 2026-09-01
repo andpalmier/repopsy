@@ -27,10 +27,11 @@ func setupRepo(t *testing.T, n int) *git.Repository {
 
 func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 	repo := setupRepo(t, 4)
-	commits, err := repo.ListCommits(context.Background(), git.ListOptions{Reverse: true})
+	listed, err := repo.ListCommits(context.Background(), git.ListOptions{Reverse: true})
 	if err != nil {
 		t.Fatalf("ListCommits: %v", err)
 	}
+	commits := listed.Commits
 	if len(commits) != 4 {
 		t.Fatalf("expected 4 commits, got %d", len(commits))
 	}
@@ -68,14 +69,28 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 		}
 	}
 
-	// Every commit adds one file, so the last snapshot holds all four plus the
-	// metadata file.
+	// A snapshot holds its two records and one tree directory, whatever the
+	// commit contains — that separation is what stops a file called
+	// COMMIT_INFO.txt from overwriting the record of the same name.
 	entries, err := os.ReadDir(results[3].OutputPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 6 {
-		t.Errorf("last snapshot has %d entries, want 6 (4 files + metadata + checksums)", len(entries))
+	if len(entries) != 3 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("snapshot has %d entries (%v), want 3: metadata, checksums, tree", len(entries), names)
+	}
+
+	// Every commit adds one file, so the last commit's tree holds all four.
+	treeEntries, err := os.ReadDir(snapshot.TreePath(results[3].OutputPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(treeEntries) != 4 {
+		t.Errorf("last tree has %d files, want 4", len(treeEntries))
 	}
 
 	// Progress went to the injected writer, not to the process's stderr.
@@ -86,10 +101,11 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 
 func TestRunNestsUnderBranch(t *testing.T) {
 	repo := setupRepo(t, 1)
-	commits, err := repo.ListCommits(context.Background(), git.ListOptions{})
+	listed, err := repo.ListCommits(context.Background(), git.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	commits := listed.Commits
 
 	outDir := filepath.Join(t.TempDir(), "out")
 	ext := New(repo, Config{OutputDir: outDir, Branch: "feat/x", Workers: 1, Writer: &strings.Builder{}})
@@ -98,7 +114,7 @@ func TestRunNestsUnderBranch(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	want := filepath.Join(outDir, "feat", "x")
+	want := filepath.Join(outDir, snapshot.RefsDir, "feat", "x")
 	if got := filepath.Dir(results[0].OutputPath); got != want {
 		t.Errorf("snapshot parent = %q, want %q", got, want)
 	}
@@ -125,10 +141,11 @@ func TestRunWithNoCommits(t *testing.T) {
 // would be counted as successes.
 func TestRunCancelledContextDispatchesNothing(t *testing.T) {
 	repo := setupRepo(t, 3)
-	commits, err := repo.ListCommits(context.Background(), git.ListOptions{})
+	listed, err := repo.ListCommits(context.Background(), git.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	commits := listed.Commits
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -155,10 +172,11 @@ func TestNewDefaultsWorkers(t *testing.T) {
 // describes is worse than none at all.
 func TestRunChecksumsMatchTheExtractedFiles(t *testing.T) {
 	repo := setupRepo(t, 3)
-	commits, err := repo.ListCommits(context.Background(), git.ListOptions{Reverse: true})
+	listed, err := repo.ListCommits(context.Background(), git.ListOptions{Reverse: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	commits := listed.Commits
 
 	outDir := filepath.Join(t.TempDir(), "out")
 	ext := New(repo, Config{OutputDir: outDir, Workers: 2, Writer: &strings.Builder{}})

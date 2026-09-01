@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +103,7 @@ func TestRunExplodesARepository(t *testing.T) {
 		t.Errorf("stderr missing the banner or summary: %q", stderr)
 	}
 
-	snapshots, err := filepath.Glob(filepath.Join(outDir, "*", "*", snapshot.MetadataFilename))
+	snapshots, err := filepath.Glob(filepath.Join(outDir, snapshot.RefsDir, "*", "*", snapshot.MetadataFilename))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +231,116 @@ func TestRunIsRepeatable(t *testing.T) {
 		code, _, stderr := invoke(t, "-o", filepath.Join(t.TempDir(), "out"), repo.Dir)
 		if code != 0 {
 			t.Fatalf("invocation %d exited %d\nstderr: %s", i, code, stderr)
+		}
+	}
+}
+
+// TestRunRepositoryFilesNeverOverwriteRecords guards a bug that destroyed
+// evidence: a commit may legitimately contain a file called COMMIT_INFO.txt or
+// SHA256SUMS, and repopsy used to write its own record over it, then publish an
+// integrity record that no longer matched the file it described.
+func TestRunRepositoryFilesNeverOverwriteRecords(t *testing.T) {
+	repo := gittest.New(t)
+	const ownContent = "THE REPOSITORY'S OWN FILE\n"
+	repo.Write(snapshot.MetadataFilename, ownContent, 0o644)
+	repo.Write(snapshot.ChecksumFilename, "the repository's own sums\n", 0o644)
+	repo.Write("other.txt", "ordinary\n", 0o644)
+	repo.Commit("files named like repopsy's records")
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	if code, _, stderr := invoke(t, "-b", repo.Branch(), "-o", outDir, repo.Dir); code != 0 {
+		t.Fatalf("exit %d\nstderr: %s", code, stderr)
+	}
+
+	snaps, err := filepath.Glob(filepath.Join(outDir, "*", snapshot.MetadataFilename))
+	if err != nil || len(snaps) != 1 {
+		t.Fatalf("expected one snapshot, got %v (%v)", snaps, err)
+	}
+	snapDir := filepath.Dir(snaps[0])
+
+	// repopsy's record is the record.
+	record, err := os.ReadFile(filepath.Join(snapDir, snapshot.MetadataFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(record), "COMMIT INFORMATION") {
+		t.Errorf("the snapshot's record was displaced by repository content: %q", string(record)[:40])
+	}
+
+	// And the repository's own file survives, byte for byte, inside the tree.
+	own, err := os.ReadFile(filepath.Join(snapshot.TreePath(snapDir), snapshot.MetadataFilename))
+	if err != nil {
+		t.Fatalf("the repository's own file was lost: %v", err)
+	}
+	if string(own) != ownContent {
+		t.Errorf("the repository's own file = %q, want %q", own, ownContent)
+	}
+
+	// The integrity record must describe what is actually on disk. It used to
+	// claim hashes for files it had overwritten.
+	sums, err := os.ReadFile(filepath.Join(snapDir, snapshot.ChecksumFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(sums)), "\n")
+	if len(lines) != 3 {
+		t.Errorf("expected 3 checksummed files, got %d: %q", len(lines), sums)
+	}
+	for _, line := range lines {
+		want, path, found := strings.Cut(line, "  ")
+		if !found {
+			t.Errorf("malformed line %q", line)
+			continue
+		}
+		if !strings.HasPrefix(path, snapshot.TreeDir+"/") {
+			t.Errorf("checksum path %q is not inside the tree", path)
+		}
+		content, err := os.ReadFile(filepath.Join(snapDir, path))
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		sum := sha256.Sum256(content)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Errorf("%s: recorded %s, actual %s", path, want, got)
+		}
+	}
+}
+
+// TestRunBranchNamesNeverDisplaceRootRecords guards the same class one level up:
+// git permits a branch called EXTRACTION.txt, whose directory used to take the
+// manifest's place and leave the run with no provenance at all.
+func TestRunBranchNamesNeverDisplaceRootRecords(t *testing.T) {
+	repo := gittest.New(t).WithCommits(1)
+	records := []string{"EXTRACTION.txt", "REFLOG.txt", "TAGS.txt", "IDENTITIES.txt", "REPOSITORY.txt"}
+	for _, name := range records {
+		repo.Git("branch", name)
+	}
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	if code, _, stderr := invoke(t, "-o", outDir, repo.Dir); code != 0 {
+		t.Fatalf("exit %d\nstderr: %s", code, stderr)
+	}
+
+	for _, name := range records {
+		// The record is a file with content.
+		info, err := os.Stat(filepath.Join(outDir, name))
+		if err != nil {
+			t.Errorf("%s missing from the output root: %v", name, err)
+			continue
+		}
+		if info.IsDir() {
+			t.Errorf("%s is a directory — a branch displaced the record", name)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("%s is empty", name)
+		}
+
+		// And the identically named branch still got its snapshots.
+		snaps, err := filepath.Glob(filepath.Join(outDir, snapshot.RefsDir, name, "*", snapshot.MetadataFilename))
+		if err != nil || len(snaps) == 0 {
+			t.Errorf("branch %s produced no snapshots under %s/", name, snapshot.RefsDir)
 		}
 	}
 }

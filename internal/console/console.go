@@ -132,6 +132,12 @@ func (c *Console) DetachedHeadFound(n int) {
 	c.printf("HEAD (detached): recovered %d commits belonging to no branch\n", n)
 }
 
+// UnparsedRecords reports that git emitted records the listing could not parse,
+// which means commits are missing from it.
+func (c *Console) UnparsedRecords(n int) {
+	c.warnf("%d record(s) could not be parsed, so commits are MISSING from this listing", n)
+}
+
 // BranchListFailed reports that a branch's commits could not be listed.
 func (c *Console) BranchListFailed(branch string, err error) {
 	c.warnf("Failed to list commits on %s: %v", branch, err)

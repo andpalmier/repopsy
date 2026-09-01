@@ -40,6 +40,10 @@ type BranchSummary struct {
 	// reaches any more.
 	Rewritten int
 
+	// Unparsed counts records git emitted for this ref that could not be
+	// parsed, meaning commits are missing from the listing entirely.
+	Unparsed int
+
 	Skipped string // why the branch produced nothing, if it did not
 }
 
@@ -126,6 +130,9 @@ func branchLine(b BranchSummary) string {
 	line := fmt.Sprintf("%-40s %d commits, %d snapshots", b.Name, b.Commits, b.Extracted)
 	if b.Rewritten > 0 {
 		line += fmt.Sprintf(" (%d recovered from the reflog)", b.Rewritten)
+	}
+	if b.Unparsed > 0 {
+		line += fmt.Sprintf("  ** %d UNPARSED RECORD(S): COMMITS ARE MISSING **", b.Unparsed)
 	}
 	return line
 }

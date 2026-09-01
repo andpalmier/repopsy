@@ -152,10 +152,11 @@ func TestRewrittenCommitsRecoversWhatAResetRemoved(t *testing.T) {
 	repo := b.open()
 	branch := b.Git("rev-parse", "--abbrev-ref", "HEAD")
 
-	reachable, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
+	listed, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reachable := listed.Commits
 	exclude := map[string]bool{}
 	for _, c := range reachable {
 		exclude[c.Hash] = true
@@ -225,10 +226,11 @@ func TestRewrittenCommitsFromHeadFindsDetachedWork(t *testing.T) {
 
 	repo := b.open()
 
-	reachable, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
+	listed, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
 	if err != nil {
 		t.Fatal(err)
 	}
+	reachable := listed.Commits
 	exclude := map[string]bool{}
 	for _, c := range reachable {
 		exclude[c.Hash] = true

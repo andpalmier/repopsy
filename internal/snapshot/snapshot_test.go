@@ -191,25 +191,25 @@ func TestPath(t *testing.T) {
 			name:   "simple branch becomes one directory",
 			outDir: "/out",
 			branch: "main",
-			want:   filepath.Join("/out", "main", snap),
+			want:   filepath.Join("/out", RefsDir, "main", snap),
 		},
 		{
 			name:   "slash in a ref name becomes nested directories",
 			outDir: "/out",
 			branch: "feat/x",
-			want:   filepath.Join("/out", "feat", "x", snap),
+			want:   filepath.Join("/out", RefsDir, "feat", "x", snap),
 		},
 		{
 			name:   "deeply nested ref name nests all the way down",
 			outDir: "/out",
 			branch: "team/feat/sub/thing",
-			want:   filepath.Join("/out", "team", "feat", "sub", "thing", snap),
+			want:   filepath.Join("/out", RefsDir, "team", "feat", "sub", "thing", snap),
 		},
 		{
 			name:   "relative output directory is preserved",
 			outDir: "out",
 			branch: "main",
-			want:   filepath.Join("out", "main", snap),
+			want:   filepath.Join("out", RefsDir, "main", snap),
 		},
 	}
 
@@ -234,10 +234,10 @@ func TestPathDistinguishesSlashAndUnderscoreBranches(t *testing.T) {
 	if slashed == underscored {
 		t.Fatalf("feat/x and feat_x both map to %q", slashed)
 	}
-	if want := filepath.Join("/out", "feat", "x", "20231205_143022_8f6a2b1"); slashed != want {
+	if want := filepath.Join("/out", RefsDir, "feat", "x", "20231205_143022_8f6a2b1"); slashed != want {
 		t.Errorf("feat/x -> %q, want %q", slashed, want)
 	}
-	if want := filepath.Join("/out", "feat_x", "20231205_143022_8f6a2b1"); underscored != want {
+	if want := filepath.Join("/out", RefsDir, "feat_x", "20231205_143022_8f6a2b1"); underscored != want {
 		t.Errorf("feat_x -> %q, want %q", underscored, want)
 	}
 }
@@ -320,8 +320,10 @@ func TestWriteChecksums(t *testing.T) {
 	}
 
 	// Two spaces between hash and path is what sha256sum -c expects.
-	want := strings.Repeat("a", 64) + "  a.go\n" +
-		strings.Repeat("b", 64) + "  dir/b with space.txt\n"
+	// Paths are relative to the snapshot directory, so they carry the tree/
+	// prefix and "sha256sum -c" works from where the record lives.
+	want := strings.Repeat("a", 64) + "  " + TreeDir + "/a.go\n" +
+		strings.Repeat("b", 64) + "  " + TreeDir + "/dir/b with space.txt\n"
 	if buf.String() != want {
 		t.Errorf("got  %q\nwant %q", buf.String(), want)
 	}
@@ -334,5 +336,41 @@ func TestWriteChecksumsEmpty(t *testing.T) {
 	}
 	if buf.String() != "" {
 		t.Errorf("expected no output for no files, got %q", buf.String())
+	}
+}
+
+// TestPathKeepsRefNamesOutOfTheRootNamespace is the reason RefsDir exists: git
+// permits a branch called EXTRACTION.txt, whose directory would otherwise
+// displace the manifest of the same name.
+func TestPathKeepsRefNamesOutOfTheRootNamespace(t *testing.T) {
+	c := sampleCommit()
+
+	for _, ref := range []string{"EXTRACTION.txt", "REFLOG.txt", "TAGS.txt", "IDENTITIES.txt", "REPOSITORY.txt"} {
+		got := Path("/out", ref, c)
+		if want := filepath.Join("/out", RefsDir, ref, "20231205_143022_8f6a2b1"); got != want {
+			t.Errorf("Path for ref %q = %q, want %q", ref, got, want)
+		}
+		// Nothing a ref is called may land directly in the output root.
+		if filepath.Dir(filepath.Dir(got)) == "/out" && !strings.Contains(got, RefsDir) {
+			t.Errorf("ref %q escaped into the root namespace: %q", ref, got)
+		}
+	}
+}
+
+// TestTreePathSeparatesContentFromRecords is the reason TreeDir exists: a commit
+// may contain a file called COMMIT_INFO.txt, which would otherwise be
+// overwritten by the snapshot's own record.
+func TestTreePathSeparatesContentFromRecords(t *testing.T) {
+	snap := Path("/out", "main", sampleCommit())
+	tree := TreePath(snap)
+
+	if tree != filepath.Join(snap, TreeDir) {
+		t.Errorf("TreePath = %q, want %q", tree, filepath.Join(snap, TreeDir))
+	}
+	// The records sit beside the tree, never inside it.
+	for _, record := range []string{MetadataFilename, ChecksumFilename} {
+		if strings.HasPrefix(filepath.Join(snap, record), tree) {
+			t.Errorf("%s would land inside the extracted tree", record)
+		}
 	}
 }

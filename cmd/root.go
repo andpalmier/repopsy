@@ -46,20 +46,24 @@ Output, at the root:
   IDENTITIES.txt   distinct name/email pairs, and collisions between them
   REPOSITORY.txt   local config and installed hooks, neither of them versioned
 
-Output, in each snapshot:
+Output, in each snapshot under refs/<ref>/<timestamp>_<hash>/:
   COMMIT_INFO.txt  the commit's forensic record: identity and tree hash, refs,
                    dates with the offset git recorded, signature and signer,
                    lineage, changed files with blob hashes, modes and status,
                    submodule pointers, anomalies, message and notes
-  SHA256SUMS       SHA-256 of every extracted file, for "sha256sum -c"
-  ...              that commit's complete working tree
+  SHA256SUMS       SHA-256 of every file in tree/, for "sha256sum -c"
+  tree/            that commit's complete working tree
+
+  Content sits under tree/ and refs under refs/ so that repository names can
+  never collide with repopsy's own records: a commit may contain a file called
+  COMMIT_INFO.txt and a branch may be called EXTRACTION.txt.
 
   Snapshot directories are named <timestamp>_<short-hash>, timestamped in the
   offset the commit records, so output is identical on any host. Branch names
   containing "/" nest as directories, and a commit on several branches is
   extracted under each of them.
 
-  With --include-rewritten and no -b, a HEAD/ directory holds commits HEAD's
+  With --include-rewritten and no -b, a refs/HEAD/ directory holds commits HEAD's
   reflog remembers that no branch reaches - work abandoned on a detached head.
 
 Examples:

@@ -163,10 +163,11 @@ func TestExtractIgnoresExportIgnore(t *testing.T) {
 	}
 
 	// The commit records the file, and now so does the snapshot.
-	commits, err := repo.ListCommits(context.Background(), ListOptions{})
+	listed, err := repo.ListCommits(context.Background(), ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	commits := listed.Commits
 	var recorded bool
 	for _, f := range commits[0].Files {
 		if f.Path == "secret.txt" {

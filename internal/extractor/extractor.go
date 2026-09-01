@@ -126,9 +126,12 @@ func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, er
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
 
+	// Content goes one level below the snapshot's own records, so a file in the
+	// commit can never overwrite one of them.
+	//
 	// The commit already carries its message body and change statistics from
 	// ListCommits, so no further git calls are needed here.
-	extracted, err := e.repo.ExtractCommit(ctx, commit.Hash, snapshotPath)
+	extracted, err := e.repo.ExtractCommit(ctx, commit.Hash, snapshot.TreePath(snapshotPath))
 	if err == nil {
 		// Only the tree listing knows which gitlinks the commit contains.
 		commit.Submodules = extracted.Submodules

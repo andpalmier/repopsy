@@ -50,10 +50,11 @@ type Config struct {
 // accumulator: the console summary and the extraction manifest are both
 // projections of it.
 type branchRun struct {
-	label   string // the ref as reported to the user
-	commits int    // reachable commits found, before any recovery
-	skipped string // why the ref produced nothing, if it did not
-	results []extractor.Result
+	label    string // the ref as reported to the user
+	commits  int    // reachable commits found, before any recovery
+	unparsed int    // records git emitted that could not be parsed
+	skipped  string // why the ref produced nothing, if it did not
+	results  []extractor.Result
 }
 
 // Run explodes the repository described by cfg.
@@ -152,7 +153,7 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 		out.BranchStarted(i+1, len(branches), branch)
 		run := branchRun{label: branch}
 
-		commits, err := repo.ListCommits(ctx, git.ListOptions{
+		listed, err := repo.ListCommits(ctx, git.ListOptions{
 			Branch:  branch,
 			Limit:   cfg.Limit,
 			Reverse: true,
@@ -162,6 +163,11 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 			run.skipped = "could not list commits: " + err.Error()
 			runs = append(runs, run)
 			continue
+		}
+		commits := listed.Commits
+		run.unparsed = listed.Unparsed
+		if listed.Unparsed > 0 {
+			out.UnparsedRecords(listed.Unparsed)
 		}
 		if len(commits) == 0 {
 			out.BranchEmpty()
@@ -194,13 +200,17 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 
 // runSingleBranch explodes one branch directly into the output directory.
 func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) ([]branchRun, error) {
-	commits, err := repo.ListCommits(ctx, git.ListOptions{
+	listed, err := repo.ListCommits(ctx, git.ListOptions{
 		Branch:  cfg.Branch,
 		Limit:   cfg.Limit,
 		Reverse: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list commits: %w", err)
+	}
+	commits := listed.Commits
+	if listed.Unparsed > 0 {
+		out.UnparsedRecords(listed.Unparsed)
 	}
 	if len(commits) == 0 {
 		return nil, fmt.Errorf("no commits found")
@@ -216,7 +226,12 @@ func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Reposi
 	// An explicit branch means a flat layout, so no branch is passed through.
 	results, err := extract(ctx, repo, outDir, "", cfg, all)
 
-	return []branchRun{{label: cfg.Branch, commits: len(commits), results: results}}, err
+	return []branchRun{{
+		label:    cfg.Branch,
+		commits:  len(commits),
+		unparsed: listed.Unparsed,
+		results:  results,
+	}}, err
 }
 
 // withRewritten returns the reachable commits followed by any the ref no longer
@@ -349,9 +364,10 @@ func buildManifest(cfg Config, repo *git.Repository, startedAt time.Time, runs [
 
 	for _, run := range runs {
 		summary := snapshot.BranchSummary{
-			Name:    run.label,
-			Commits: run.commits,
-			Skipped: run.skipped,
+			Name:     run.label,
+			Commits:  run.commits,
+			Unparsed: run.unparsed,
+			Skipped:  run.skipped,
 		}
 		for _, r := range run.results {
 			if r.Commit.Unreachable {
