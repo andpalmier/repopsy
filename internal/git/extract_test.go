@@ -27,10 +27,22 @@ func newRepo(t *testing.T) *repoBuilder {
 	return b
 }
 
+// testIdentity pins the identity git records. GIT_AUTHOR_* and GIT_COMMITTER_*
+// environment variables override local config, and a developer machine may well
+// have them set, so relying on "git config user.name" alone makes any test that
+// asserts an identity pass locally and differ on CI.
+var testIdentity = []string{
+	"GIT_AUTHOR_NAME=Test User",
+	"GIT_AUTHOR_EMAIL=test@example.com",
+	"GIT_COMMITTER_NAME=Test User",
+	"GIT_COMMITTER_EMAIL=test@example.com",
+}
+
 func (b *repoBuilder) git(args ...string) string {
 	b.t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = b.dir
+	cmd.Env = append(os.Environ(), testIdentity...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		b.t.Fatalf("git %v failed: %v\n%s", args, err, out)

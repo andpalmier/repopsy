@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-// ManifestFilename is the provenance record written at the root of an
-// exploded repository.
-const ManifestFilename = "EXTRACTION.txt"
-
 // Manifest records how an explosion was produced. Without it, a folder of
 // snapshots says nothing about which repository it came from, when, or with
 // which tool — none of which can be recovered afterwards.
@@ -63,16 +59,14 @@ func (m Manifest) Duration() string {
 	return m.FinishedAt.Sub(m.StartedAt).Round(time.Millisecond).String()
 }
 
-// WriteManifest renders the provenance record into w.
-func WriteManifest(w io.Writer, m Manifest) error {
-	if err := manifestTemplate.Execute(w, m); err != nil {
-		return fmt.Errorf("failed to render extraction manifest: %w", err)
-	}
-	return nil
+func (Manifest) Filename() string { return "EXTRACTION.txt" }
+
+// Render writes the provenance record.
+func (m Manifest) Render(w io.Writer) error {
+	return render(w, manifestTemplate, m.Filename(), m)
 }
 
-var manifestTemplate = template.Must(template.New("manifest").Funcs(template.FuncMap{
-	"formatDate":  func(t interface{ Format(string) string }) string { return t.Format(dateFormat) },
+var manifestTemplate = template.Must(template.New("manifest").Funcs(reportFuncs).Funcs(template.FuncMap{
 	"branchLine":  branchLine,
 	"failureLine": failureLine,
 }).Parse(manifestTemplateStr))

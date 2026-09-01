@@ -21,6 +21,10 @@ func setupRepo(t *testing.T, n int) *git.Repository {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
+		// GIT_AUTHOR_*/GIT_COMMITTER_* override local config, so pin them.
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test User", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test User", "GIT_COMMITTER_EMAIL=test@example.com")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v failed: %v\n%s", args, err, out)
 		}

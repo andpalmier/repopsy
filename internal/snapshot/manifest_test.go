@@ -27,8 +27,8 @@ func sampleManifest() Manifest {
 
 func TestWriteManifestGolden(t *testing.T) {
 	var buf strings.Builder
-	if err := WriteManifest(&buf, sampleManifest()); err != nil {
-		t.Fatalf("WriteManifest: %v", err)
+	if err := sampleManifest().Render(&buf); err != nil {
+		t.Fatalf("Render: %v", err)
 	}
 	assertGolden(t, "manifest.golden", buf.String())
 }
@@ -44,8 +44,8 @@ func TestWriteManifestWithFailures(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	if err := WriteManifest(&buf, m); err != nil {
-		t.Fatalf("WriteManifest: %v", err)
+	if err := m.Render(&buf); err != nil {
+		t.Fatalf("Render: %v", err)
 	}
 	out := buf.String()
 
@@ -66,7 +66,7 @@ func TestWriteManifestWithFailures(t *testing.T) {
 
 func TestManifestScopeAndLimitDefaults(t *testing.T) {
 	var buf strings.Builder
-	if err := WriteManifest(&buf, sampleManifest()); err != nil {
+	if err := sampleManifest().Render(&buf); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -89,7 +89,7 @@ func TestManifestOmitsUnsetBuildFields(t *testing.T) {
 	m.ToolCommit, m.ToolBuilt = "", ""
 
 	var buf strings.Builder
-	if err := WriteManifest(&buf, m); err != nil {
+	if err := m.Render(&buf); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -116,7 +116,7 @@ func TestManifestEmptyBranches(t *testing.T) {
 	m.Branches = nil
 
 	var buf strings.Builder
-	if err := WriteManifest(&buf, m); err != nil {
+	if err := m.Render(&buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "(none)") {

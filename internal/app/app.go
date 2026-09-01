@@ -78,11 +78,9 @@ func Run(ctx context.Context, cfg Config) error {
 		runs, runErr = runAllBranches(ctx, out, repo, outDir, cfg)
 	}
 
-	// Provenance is written even for a partial run: a folder of snapshots that
-	// cannot say where it came from is not evidence.
-	if err := writeManifest(outDir, cfg, repo, startedAt, runs); err != nil {
-		out.ManifestFailed(err)
-	}
+	// Written even for a partial run: a folder of snapshots that cannot say
+	// where it came from is not evidence.
+	writeReports(ctx, out, outDir, cfg, repo, startedAt, runs)
 
 	out.Summary(outDir, outcomes(runs), cfg.Verbose)
 	return runErr
@@ -211,8 +209,38 @@ func outcomes(runs []branchRun) []console.Outcome {
 	return all
 }
 
-// writeManifest records the provenance of the explosion at the output root.
-func writeManifest(outDir string, cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) (err error) {
+// writeReports records everything about the run that is not a single commit.
+// Each failure is reported and the rest still get written: a missing reflog
+// should not cost you the manifest.
+func writeReports(ctx context.Context, out *console.Console, outDir string, cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) {
+	reports := []snapshot.Report{buildManifest(cfg, repo, startedAt, runs)}
+
+	// Skipped silently on cancellation, where these would only fail noisily.
+	if ctx.Err() == nil {
+		if entries, err := repo.Reflog(ctx); err != nil {
+			out.ReportFailed(snapshot.Reflog{}.Filename(), err)
+		} else {
+			reports = append(reports, snapshot.Reflog{Entries: entries})
+		}
+
+		if tags, err := repo.Tags(ctx); err != nil {
+			out.ReportFailed(snapshot.Tags{}.Filename(), err)
+		} else {
+			reports = append(reports, snapshot.Tags{Tags: tags})
+		}
+	}
+
+	reports = append(reports, snapshot.NewIdentities(extracted(runs)))
+
+	for _, r := range reports {
+		if err := snapshot.Write(outDir, r); err != nil {
+			out.ReportFailed(r.Filename(), err)
+		}
+	}
+}
+
+// buildManifest projects the runs onto the provenance record.
+func buildManifest(cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) snapshot.Manifest {
 	m := snapshot.Manifest{
 		ToolVersion: cfg.ToolVersion,
 		ToolCommit:  cfg.ToolCommit,
@@ -244,21 +272,18 @@ func writeManifest(outDir string, cfg Config, repo *git.Repository, startedAt ti
 		}
 		m.Branches = append(m.Branches, summary)
 	}
+	return m
+}
 
-	// The output directory may not exist yet if nothing was extracted at all.
-	if mkErr := os.MkdirAll(outDir, 0o755); mkErr != nil {
-		return fmt.Errorf("failed to create output directory: %w", mkErr)
-	}
-
-	f, err := os.Create(filepath.Join(outDir, snapshot.ManifestFilename))
-	if err != nil {
-		return fmt.Errorf("failed to create manifest: %w", err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("failed to close manifest: %w", closeErr)
+// extracted flattens the commits that produced a snapshot.
+func extracted(runs []branchRun) []git.Commit {
+	var commits []git.Commit
+	for _, run := range runs {
+		for _, r := range run.results {
+			if r.Error == nil {
+				commits = append(commits, r.Commit)
+			}
 		}
-	}()
-
-	return snapshot.WriteManifest(f, m)
+	}
+	return commits
 }

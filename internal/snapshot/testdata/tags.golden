@@ -1,0 +1,17 @@
+TAGS
+===========================
+
+Tags are not extracted as snapshots; their targets appear under the branches
+that reach them. An annotated tag carries its own tagger identity, date and
+signature, which is an attestation separate from the commit it points at.
+
+light
+  Target:       fb2f13f5afefc73dd16a7808bbbcb06cc332c0f8
+  Type:         lightweight
+v1.0
+  Target:       fb2f13f5afefc73dd16a7808bbbcb06cc332c0f8
+  Type:         annotated (tag object 52eeec1baa7d758e10178c82bccd96f6778297ca)
+  Tagger:       Alice Dev <alice@example.com>
+  Date:         2023-12-05T15:37:04+01:00
+  Signature:    present
+  Subject:      release one

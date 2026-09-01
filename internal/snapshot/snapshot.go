@@ -70,9 +70,8 @@ func WriteMetadata(w io.Writer, c git.Commit) error {
 	return nil
 }
 
-var metadataTemplate = template.Must(template.New("metadata").Funcs(template.FuncMap{
+var metadataTemplate = template.Must(template.New("metadata").Funcs(reportFuncs).Funcs(template.FuncMap{
 	"formatGPGStatus": formatGPGStatus,
-	"formatDate":      func(t interface{ Format(string) string }) string { return t.Format(dateFormat) },
 	"fileLine":        fileLine,
 }).Parse(metadataTemplateStr))
 

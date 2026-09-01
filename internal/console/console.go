@@ -126,10 +126,10 @@ func (c *Console) CommitsToExtract(n int) {
 	fmt.Fprintf(c.w, "Found %d commits to extract\n\n", n)
 }
 
-// ManifestFailed reports that the provenance record could not be written. The
-// snapshots are already on disk, so this is a warning rather than a failure.
-func (c *Console) ManifestFailed(err error) {
-	c.warnf("Failed to write the extraction manifest: %v", err)
+// ReportFailed reports that one of the output root's records could not be
+// written. The snapshots are already on disk, so this is a warning.
+func (c *Console) ReportFailed(name string, err error) {
+	c.warnf("Failed to write %s: %v", name, err)
 }
 
 // Outcome is one snapshot's result, as far as reporting is concerned. The
