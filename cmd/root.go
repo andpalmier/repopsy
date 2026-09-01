@@ -26,14 +26,29 @@ const (
 A forensic tool for analyzing git repository history (Repository Autopsy) by extracting
 each commit's state into a separate folder for comparison and analysis.
 
+Any path inside a repository names the repository itself. Requires git 2.31 or newer.
+
 Usage:
   repopsy [flags] <repository-path>
 
+Output:
+  <output-dir>/EXTRACTION.txt    provenance of the run: tool build, times, scope,
+                                 per-branch counts and any failures
+  <snapshot>/COMMIT_INFO.txt     forensic record of one commit: identity and tree
+                                 hash, refs, dates with the offset git recorded,
+                                 signature and signer identity, lineage, changed
+                                 files with modes and status, anomalies, message
+  <snapshot>/...                 that commit's complete working tree
+
+  Snapshot directories are named <timestamp>_<short-hash>, timestamped in the
+  offset the commit records, so output is identical on any host. Branch names
+  containing "/" nest as directories.
+
 Examples:
-  # Explode all commits from all branches
+  # Explode all commits from all local branches
   repopsy .
 
-  # Explode the last 5 commits from all branches
+  # Explode the last 5 commits
   repopsy -n 5 /path/to/repo
 
   # Explode a specific branch only
@@ -78,7 +93,7 @@ func newFlagSet(o *options) *flag.FlagSet {
 	alias(fs.StringVar, &o.cfg.OutputDir, "o", "output", "", "Output directory (default: ./<repo-name>-exploded)")
 	alias(fs.IntVar, &o.cfg.Workers, "w", "workers", defaultWorkers(), fmt.Sprintf("Number of parallel workers per branch (max %d)", maxWorkers))
 	alias(fs.IntVar, &o.cfg.Limit, "n", "limit", 0, "Maximum number of commits to extract (0 = all)")
-	alias(fs.StringVar, &o.cfg.Branch, "b", "branch", "", "Branch to extract from (default: all branches)")
+	alias(fs.StringVar, &o.cfg.Branch, "b", "branch", "", "Branch to extract from (default: all local branches)")
 	alias(fs.BoolVar, &o.cfg.Verbose, "v", "verbose", false, "Show detailed output per commit")
 	alias(fs.BoolVar, &o.showHelp, "h", "help", false, "Show help message")
 	fs.BoolVar(&o.showVersion, "version", false, "Show version information")
@@ -138,6 +153,12 @@ func Execute(version, commit, date string) int {
 		printVersion(os.Stdout, version, commit, date)
 		return 0
 	}
+
+	// Recorded in the extraction manifest so the output states which build
+	// produced it.
+	opts.cfg.ToolVersion = version
+	opts.cfg.ToolCommit = commit
+	opts.cfg.ToolBuilt = date
 
 	// Cancel on interrupt so in-flight git and tar processes are torn down.
 	ctx, cancel := context.WithCancel(context.Background())

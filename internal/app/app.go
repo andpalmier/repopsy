@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/andpalmier/repopsy/internal/console"
 	"github.com/andpalmier/repopsy/internal/extractor"
 	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/internal/snapshot"
 )
 
 // outputSuffix is appended to the repository name to name the output directory.
@@ -28,11 +30,27 @@ type Config struct {
 
 	// Writer receives all terminal output. Defaults to standard error.
 	Writer io.Writer
+
+	// Tool build information, recorded in the extraction manifest.
+	ToolVersion string
+	ToolCommit  string
+	ToolBuilt   string
+}
+
+// branchRun is one branch's contribution to an explosion. It is the single
+// accumulator: the console summary and the extraction manifest are both
+// projections of it.
+type branchRun struct {
+	label   string // the branch as reported to the user
+	commits int
+	skipped string // why the branch produced nothing, if it did not
+	results []extractor.Result
 }
 
 // Run executes the repopsy application logic
 func Run(ctx context.Context, cfg Config) error {
 	out := console.New(cfg.Writer)
+	startedAt := time.Now()
 
 	repo, err := git.Open(cfg.RepoPath)
 	if err != nil {
@@ -52,10 +70,22 @@ func Run(ctx context.Context, cfg Config) error {
 		Limit:     cfg.Limit,
 	})
 
+	var runs []branchRun
+	var runErr error
 	if cfg.Branch != "" {
-		return runSingleBranch(ctx, out, repo, outDir, cfg)
+		runs, runErr = runSingleBranch(ctx, out, repo, outDir, cfg)
+	} else {
+		runs, runErr = runAllBranches(ctx, out, repo, outDir, cfg)
 	}
-	return runAllBranches(ctx, out, repo, outDir, cfg)
+
+	// Provenance is written even for a partial run: a folder of snapshots that
+	// cannot say where it came from is not evidence.
+	if err := writeManifest(outDir, cfg, repo, startedAt, runs); err != nil {
+		out.ManifestFailed(err)
+	}
+
+	out.Summary(outDir, outcomes(runs), cfg.Verbose)
+	return runErr
 }
 
 // resolveOutputDir picks the output directory and refuses to reuse an existing
@@ -78,26 +108,27 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 }
 
 // runAllBranches explodes every local branch into its own directory tree.
-func runAllBranches(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) error {
+func runAllBranches(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) ([]branchRun, error) {
 	branches, err := repo.ListBranches(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list branches: %w", err)
+		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}
 	if len(branches) == 0 {
-		return fmt.Errorf("no branches found")
+		return nil, fmt.Errorf("no branches found")
 	}
 
 	out.BranchesFound(len(branches))
 
-	var outcomes []console.Outcome
+	var runs []branchRun
 	var extractionErr error
 
 	for i, branch := range branches {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return runs, ctx.Err()
 		}
 
 		out.BranchStarted(i+1, len(branches), branch)
+		run := branchRun{label: branch}
 
 		commits, err := repo.ListCommits(ctx, git.ListOptions{
 			Branch:  branch,
@@ -106,37 +137,43 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 		})
 		if err != nil {
 			out.BranchListFailed(branch, err)
+			run.skipped = "could not list commits: " + err.Error()
+			runs = append(runs, run)
 			continue
 		}
 		if len(commits) == 0 {
 			out.BranchEmpty()
+			run.skipped = "no commits"
+			runs = append(runs, run)
 			continue
 		}
+
 		out.BranchCommits(len(commits))
+		run.commits = len(commits)
 
 		results, err := extract(ctx, repo, outDir, branch, cfg, commits)
-		outcomes = append(outcomes, toOutcomes(results)...)
+		run.results = results
+		runs = append(runs, run)
 		if err != nil && extractionErr == nil {
 			extractionErr = err
 		}
 	}
 
-	out.Summary(outDir, outcomes, cfg.Verbose)
-	return extractionErr
+	return runs, extractionErr
 }
 
 // runSingleBranch explodes one branch directly into the output directory.
-func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) error {
+func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) ([]branchRun, error) {
 	commits, err := repo.ListCommits(ctx, git.ListOptions{
 		Branch:  cfg.Branch,
 		Limit:   cfg.Limit,
 		Reverse: true,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list commits: %w", err)
+		return nil, fmt.Errorf("failed to list commits: %w", err)
 	}
 	if len(commits) == 0 {
-		return fmt.Errorf("no commits found")
+		return nil, fmt.Errorf("no commits found")
 	}
 
 	out.CommitsToExtract(len(commits))
@@ -144,8 +181,11 @@ func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Reposi
 	// An explicit branch means a flat layout, so no branch is passed through.
 	results, err := extract(ctx, repo, outDir, "", cfg, commits)
 
-	out.Summary(outDir, toOutcomes(results), cfg.Verbose)
-	return err
+	return []branchRun{{
+		label:   cfg.Branch,
+		commits: len(commits),
+		results: results,
+	}}, err
 }
 
 // extract runs the extractor over one branch's commits.
@@ -160,11 +200,65 @@ func extract(ctx context.Context, repo *git.Repository, outDir, branch string, c
 	return ext.Run(ctx, commits)
 }
 
-// toOutcomes reduces extraction results to what the console needs to report.
-func toOutcomes(results []extractor.Result) []console.Outcome {
-	outcomes := make([]console.Outcome, len(results))
-	for i, r := range results {
-		outcomes[i] = console.Outcome{ShortHash: r.Commit.ShortHash, Err: r.Error}
+// outcomes projects the runs onto what the console needs to report.
+func outcomes(runs []branchRun) []console.Outcome {
+	var all []console.Outcome
+	for _, run := range runs {
+		for _, r := range run.results {
+			all = append(all, console.Outcome{ShortHash: r.Commit.ShortHash, Err: r.Error})
+		}
 	}
-	return outcomes
+	return all
+}
+
+// writeManifest records the provenance of the explosion at the output root.
+func writeManifest(outDir string, cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) (err error) {
+	m := snapshot.Manifest{
+		ToolVersion: cfg.ToolVersion,
+		ToolCommit:  cfg.ToolCommit,
+		ToolBuilt:   cfg.ToolBuilt,
+		StartedAt:   startedAt,
+		FinishedAt:  time.Now(),
+		RepoPath:    repo.Path,
+		Branch:      cfg.Branch,
+		Workers:     cfg.Workers,
+		Limit:       cfg.Limit,
+	}
+
+	for _, run := range runs {
+		summary := snapshot.BranchSummary{
+			Name:    run.label,
+			Commits: run.commits,
+			Skipped: run.skipped,
+		}
+		for _, r := range run.results {
+			if r.Error != nil {
+				m.Failures = append(m.Failures, snapshot.Failure{
+					Branch:    run.label,
+					ShortHash: r.Commit.ShortHash,
+					Reason:    r.Error.Error(),
+				})
+				continue
+			}
+			summary.Extracted++
+		}
+		m.Branches = append(m.Branches, summary)
+	}
+
+	// The output directory may not exist yet if nothing was extracted at all.
+	if mkErr := os.MkdirAll(outDir, 0o755); mkErr != nil {
+		return fmt.Errorf("failed to create output directory: %w", mkErr)
+	}
+
+	f, err := os.Create(filepath.Join(outDir, snapshot.ManifestFilename))
+	if err != nil {
+		return fmt.Errorf("failed to create manifest: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close manifest: %w", closeErr)
+		}
+	}()
+
+	return snapshot.WriteManifest(f, m)
 }

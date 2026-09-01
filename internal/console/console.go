@@ -126,6 +126,12 @@ func (c *Console) CommitsToExtract(n int) {
 	fmt.Fprintf(c.w, "Found %d commits to extract\n\n", n)
 }
 
+// ManifestFailed reports that the provenance record could not be written. The
+// snapshots are already on disk, so this is a warning rather than a failure.
+func (c *Console) ManifestFailed(err error) {
+	c.warnf("Failed to write the extraction manifest: %v", err)
+}
+
 // Outcome is one snapshot's result, as far as reporting is concerned. The
 // console deliberately does not know about extraction — only about outcomes.
 type Outcome struct {

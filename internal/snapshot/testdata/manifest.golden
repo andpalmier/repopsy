@@ -1,0 +1,36 @@
+REPOPSY EXTRACTION MANIFEST
+===========================
+
+Provenance record for this exploded repository. Snapshot directories and their
+COMMIT_INFO.txt files describe individual commits; this file describes how the
+extraction itself was performed.
+
+TOOL
+----
+Version:        1.4.0
+Build commit:   58bb650
+Built:          2023-12-05T12:00:00Z
+
+EXTRACTION
+----------
+Started:        2023-12-05T15:10:10+01:00
+Finished:       2023-12-05T15:10:19+01:00
+Duration:       9s
+
+SOURCE
+------
+Repository:     /repos/demo
+Scope:          all local branches
+Workers:        8
+Commit limit:   none
+
+BRANCHES
+--------
+main                                     412 commits, 412 snapshots
+feature/login                            37 commits, 37 snapshots
+stale-branch                             no commits
+
+RESULTS
+-------
+Snapshots:      449
+Failures:       0

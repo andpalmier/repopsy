@@ -17,22 +17,40 @@ var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 // a parent, a signature, and a multi-paragraph message — so the golden exercises
 // every branch of the template at once.
 func sampleCommit() git.Commit {
+	author, _ := time.Parse(time.RFC3339, "2023-12-05T14:30:22+01:00")
+	committer, _ := time.Parse(time.RFC3339, "2023-12-05T15:00:00+01:00")
 	return git.Commit{
 		Hash:           "8f6a2b1c4d5e6f70819243546576879a0b1c2d3e",
 		ShortHash:      "8f6a2b1",
+		TreeHash:       "21b28cfd6375d10b1cda85f50a998fdf1557404f",
 		Author:         "Alice Dev",
 		AuthorEmail:    "alice@example.com",
-		AuthorDate:     time.Unix(1701786622, 0).UTC(),
+		AuthorDate:     author,
 		Committer:      "Bob Ops",
 		CommitterEmail: "bob@example.com",
-		CommitDate:     time.Unix(1701788400, 0).UTC(),
+		CommitDate:     committer,
 		Subject:        "Fix the extraction logic",
 		ParentHashes:   []string{"7e5d1c2b"},
-		FullMessage:    "Fix the extraction logic\n\nLonger body here.\n",
-		GPGSignature:   "G",
-		FilesChanged:   5,
-		Insertions:     120,
-		Deletions:      34,
+		FullMessage:    "Fix the extraction logic\n\nLonger body here.",
+		Refs:           "HEAD -> main, tag: v1.2.3",
+		Signature: git.Signature{
+			Status:      "G",
+			Signer:      "Alice Dev <alice@example.com>",
+			Key:         "ABCD1234EF567890",
+			Fingerprint: "FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444",
+			Trust:       "ultimate",
+		},
+		Files: []git.FileChange{
+			{Path: "go.mod", Status: "M", OldMode: "100644", NewMode: "100644",
+				OldBlob: "a23b1f0", NewBlob: "9817e7c", Insertions: 1, Deletions: 1},
+			{Path: "scripts/deploy.sh", Status: "M", OldMode: "100644", NewMode: "100755",
+				OldBlob: "aaa1111", NewBlob: "bbb2222", Insertions: 4, Deletions: 2},
+			{Path: "demo.gif", Status: "A", OldMode: "000000", NewMode: "100644",
+				OldBlob: "0000000", NewBlob: "ccc3333", Binary: true},
+		},
+		FilesChanged: 3,
+		Insertions:   5,
+		Deletions:    3,
 	}
 }
 
@@ -103,17 +121,17 @@ func TestWriteMetadataVariants(t *testing.T) {
 		},
 		{
 			name:   "unsigned commit renders prose, not the raw code",
-			mutate: func(c *git.Commit) { c.GPGSignature = "" },
+			mutate: func(c *git.Commit) { c.Signature.Status = "" },
 			want:   []string{"GPG Signature:  Not signed"},
 		},
 		{
 			name:   "bad signature is surfaced",
-			mutate: func(c *git.Commit) { c.GPGSignature = "B" },
+			mutate: func(c *git.Commit) { c.Signature.Status = "B" },
 			want:   []string{"GPG Signature:  Bad signature"},
 		},
 		{
 			name:   "unrecognised signature code is passed through",
-			mutate: func(c *git.Commit) { c.GPGSignature = "Z" },
+			mutate: func(c *git.Commit) { c.Signature.Status = "Z" },
 			want:   []string{"GPG Signature:  Unknown (Z)"},
 		},
 		{

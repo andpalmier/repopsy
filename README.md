@@ -21,7 +21,8 @@ How It Works:
 2. Lists commits, gathering every metadata field in a single `git log`
 3. Creates worker goroutines
 4. Each worker uses `git archive | tar -x` for efficient extraction
-5. Writes metadata to each folder in `COMMIT_INFO.txt`
+5. Writes a forensic record to each folder in `COMMIT_INFO.txt`
+6. Writes a provenance record for the whole run in `EXTRACTION.txt`
 
 Any path inside a repository names the repository itself, so `repopsy .` behaves
 the same from any subdirectory. Bare repositories are supported.
@@ -134,6 +135,7 @@ branch containing `/` nests, mirroring its ref path:
 
 ```
 <repo>-exploded/
+├── EXTRACTION.txt                <- provenance for the whole run
 ├── main/
 │   ├── 20231205_143022_abc1234/
 │   │   ├── COMMIT_INFO.txt
@@ -153,11 +155,16 @@ while `main` exists, so no two branches can claim the same directory.
 When extracting a single branch:
 ```
 <repo>-exploded/
+├── EXTRACTION.txt
 ├── 20231205_143022_abc1234/
 │   ├── COMMIT_INFO.txt
 │   └── ... (source files)
 └── 20231205_150000_def5678/
 ```
+
+Snapshot directory names are timestamped in **the offset the commit itself
+records**, never the offset of the machine running repopsy, so the same
+repository always explodes into the same directory names on any host.
 
 ## Known Limitations
 
@@ -171,15 +178,45 @@ When extracting a single branch:
   usually a single branch — fetch or check out the branches you want first, or
   pass `-b`.
 
-## Commit Metadata
+## Forensic Record
 
-Each exploded folder includes a `COMMIT_INFO.txt` file containing metadata about
-the commit: this includes verification status (GPG), timestamps, and authorship
-details.
+Each snapshot folder includes a `COMMIT_INFO.txt` recording everything git knows
+about that commit.
 
-Change statistics are measured against the commit's first parent. A merge commit
-is measured the same way, so changes brought in from the other side of the merge
-are not counted twice.
+**Identity** — commit hash, abbreviated hash, and tree hash. The tree hash
+identifies the content independently of commit metadata, so identical trees can
+be spotted across rewritten or cherry-picked history.
+
+**Refs** — the branches and tags pointing at the commit, when any do.
+
+**Dates** — author and committer dates in ISO 8601, carrying **the UTC offset
+git recorded**, plus the Unix timestamp. The recorded offset indicates the
+author's locale and working hours, so it is preserved rather than being
+re-rendered in the timezone of whoever runs the tool. Output is therefore
+identical on every host.
+
+**Signature** — the verification verdict *and* the signer's identity: declared
+name, key ID, fingerprint, and the trust level git assigns the key. A valid
+signature made by an unexpected key is indistinguishable from a legitimate one
+if only the verdict is recorded.
+
+**Lineage** — parent hashes, or an explicit note for a root commit.
+
+**Changed files** — every path the commit touched, with its status letter
+(`A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `T` type
+changed), line counts, and both file modes. A mode change is called out
+explicitly: `100644 -> 100755` means a file became executable.
+
+**Change statistics** are measured against the commit's first parent. A merge
+commit is measured the same way, so changes brought in from the other side of
+the merge are not counted twice.
+
+**Anomalies** — a commit whose author date is *later* than its committer date is
+flagged. This does not occur in normal use and indicates a rewritten or forged
+date.
+
+**Message and notes** — subject, full message, declared encoding, and any git
+notes attached to the commit.
 
 **Example `COMMIT_INFO.txt` content:**
 
@@ -187,44 +224,107 @@ are not counted twice.
 COMMIT INFORMATION
 ===========================
 
-Hash:           8f6a2b1c4d5e...
-Short Hash:     8f6a2b1
+Hash:           58bb650e3a850c51fe605f8725a7338d903a061c
+Short Hash:     58bb650
+Tree:           344892c8bb98059a9e529b0833c4b4a6e5907f66
+Refs:           origin/main, origin/HEAD, main
 
 AUTHOR (who wrote the code)
 ---------------------------
 Name:           Alice Dev
 Email:          alice@example.com
-Date:           2023-12-05T14:30:22Z
+Date:           2023-12-05T14:30:22+01:00
 Timestamp:      1701786622
 
 COMMITTER (who applied the commit)
 ----------------------------------
 Name:           Bob Ops
 Email:          bob@example.com
-Date:           2023-12-05T15:00:00Z
+Date:           2023-12-05T15:00:00+01:00
 Timestamp:      1701788400
+
+NOTE: Author and Committer are different.
 
 VERIFICATION
 ------------
 GPG Signature:  Valid signature (good)
+Signer:         Alice Dev <alice@example.com>
+Key:            ABCD1234EF567890
+Fingerprint:    FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444
+Trust:          ultimate
 
 LINEAGE
 -------
-Parents:        7e5d1c2b... 
+Parents:        7e5d1c2b
 
 CHANGE STATISTICS
 -----------------
-Files Changed:  5
-Insertions:     +120
-Deletions:      -34
+Files Changed:  3
+Insertions:     +5
+Deletions:      -3
+
+CHANGED FILES
+-------------
+M    +1      -1      go.mod
+M    +4      -2      scripts/deploy.sh  [mode 100644 -> 100755]
+A    binary          demo.gif
 
 COMMIT MESSAGE
 --------------
 Subject:
-Fix critical security vulnerability in extraction logic
+Fix the extraction logic
 
 Full Message:
-Fix critical security vulnerability in extraction logic
+Fix the extraction logic
 
-This patch addresses CVE-2023-XXXX by sanitizing input paths...
+Longer body here.
+```
+
+## Extraction Manifest
+
+A folder of snapshots says nothing about where it came from. `EXTRACTION.txt` at
+the output root records the provenance of the run itself: which repopsy build
+produced it, when it started and finished, which repository and scope, the
+worker count and commit limit, a per-branch breakdown of commits found against
+snapshots written, and any failures with their reasons.
+
+**Example `EXTRACTION.txt` content:**
+
+```text
+REPOPSY EXTRACTION MANIFEST
+===========================
+
+Provenance record for this exploded repository. Snapshot directories and their
+COMMIT_INFO.txt files describe individual commits; this file describes how the
+extraction itself was performed.
+
+TOOL
+----
+Version:        1.4.0
+Build commit:   58bb650
+Built:          2023-12-05T12:00:00Z
+
+EXTRACTION
+----------
+Started:        2023-12-05T15:10:10+01:00
+Finished:       2023-12-05T15:10:19+01:00
+Duration:       9.412s
+
+SOURCE
+------
+Repository:     /repos/demo
+Scope:          all local branches
+Workers:        8
+Commit limit:   none
+
+BRANCHES
+--------
+main                                     412 commits, 412 snapshots
+feature/login                            37 commits, 37 snapshots
+stale-branch                             no commits
+
+RESULTS
+-------
+Snapshots:      449
+Failures:       0
 ```
