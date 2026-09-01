@@ -5,49 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/internal/gittest"
 	"github.com/andpalmier/repopsy/internal/snapshot"
 )
 
 // setupRepo builds a temporary repository with n commits, each adding one file.
 func setupRepo(t *testing.T, n int) *git.Repository {
 	t.Helper()
-	dir := t.TempDir()
-
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		// GIT_AUTHOR_*/GIT_COMMITTER_* override local config, so pin them.
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test User", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test User", "GIT_COMMITTER_EMAIL=test@example.com")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, out)
-		}
-	}
-
-	run("init")
-	run("config", "user.name", "Test User")
-	run("config", "user.email", "test@example.com")
-	// Independent of the machine's global git config.
-	run("config", "commit.gpgsign", "false")
-
-	for i := range n {
-		name := "file" + string(rune('a'+i)) + ".txt"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("content"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		run("add", name)
-		run("commit", "-m", "commit "+string(rune('a'+i)))
-	}
-
-	repo, err := git.Open(dir)
+	built := gittest.New(t).WithCommits(n)
+	repo, err := git.Open(built.Dir)
 	if err != nil {
 		t.Fatalf("git.Open: %v", err)
 	}

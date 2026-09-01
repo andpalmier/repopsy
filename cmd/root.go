@@ -49,7 +49,11 @@ Output, in each snapshot:
 
   Snapshot directories are named <timestamp>_<short-hash>, timestamped in the
   offset the commit records, so output is identical on any host. Branch names
-  containing "/" nest as directories.
+  containing "/" nest as directories, and a commit on several branches is
+  extracted under each of them.
+
+  With --include-rewritten and no -b, a HEAD/ directory holds commits HEAD's
+  reflog remembers that no branch reaches - work abandoned on a detached head.
 
 Examples:
   # Explode all commits from all local branches
@@ -148,44 +152,61 @@ func parseArgs(args []string, warn io.Writer) (options, error) {
 	return o, nil
 }
 
-// Execute runs the CLI application and returns an exit code.
+// build is the version information linked in at build time.
+type build struct {
+	version string
+	commit  string
+	date    string
+}
+
+// Execute runs the CLI against the process and returns an exit code.
 func Execute(version, commit, date string) int {
-	opts, err := parseArgs(os.Args[1:], os.Stderr)
+	return run(os.Args[1:], os.Stdout, os.Stderr, build{version, commit, date})
+}
+
+// run is the whole CLI expressed as a function of its inputs, so its exit codes
+// and output are reachable from a test without spawning a subprocess.
+func run(args []string, stdout, stderr io.Writer, b build) int {
+	opts, err := parseArgs(args, stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
-		printUsage(os.Stderr)
+		fmt.Fprintf(stderr, "Error: %v\n\n", err)
+		printUsage(stderr)
 		return 1
 	}
 
 	if opts.showHelp {
-		printUsage(os.Stdout)
+		printUsage(stdout)
 		return 0
 	}
 	if opts.showVersion {
-		printVersion(os.Stdout, version, commit, date)
+		printVersion(stdout, b.version, b.commit, b.date)
 		return 0
 	}
 
 	// Recorded in the extraction manifest so the output states which build
 	// produced it.
-	opts.cfg.ToolVersion = version
-	opts.cfg.ToolCommit = commit
-	opts.cfg.ToolBuilt = date
+	opts.cfg.ToolVersion = b.version
+	opts.cfg.ToolCommit = b.commit
+	opts.cfg.ToolBuilt = b.date
 
-	// Cancel on interrupt so in-flight git and tar processes are torn down.
+	// Progress and reporting share the caller's error stream.
+	opts.cfg.Writer = stderr
+
+	// Cancel on interrupt so in-flight git processes are torn down.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 	go func() {
 		<-sigChan
-		fmt.Fprintln(os.Stderr, "\n⚠ Interrupted, cleaning up...")
+		fmt.Fprintln(stderr, "\n⚠ Interrupted, cleaning up...")
 		cancel()
 	}()
 
 	if err := app.Run(ctx, opts.cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 

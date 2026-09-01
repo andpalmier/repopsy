@@ -154,9 +154,20 @@ branch containing `/` nests, mirroring its ref path:
 ├── feature/
 │   └── login/                    <- branch "feature/login"
 │       └── ...
-└── develop/
-    └── ...
+├── develop/
+│   └── ...
+└── HEAD/                         <- only with --include-rewritten:
+    └── ...                          work abandoned on a detached head
 ```
+
+A commit reachable from several branches is extracted under each of them. That
+duplication is deliberate: each branch directory is a complete account of that
+branch's history, rather than a set of pointers into a shared pool.
+
+`HEAD/` appears only with `--include-rewritten`, and holds commits that HEAD's
+reflog remembers but no branch reaches — typically work committed on a detached
+head and then abandoned. It cannot collide with a branch directory, because git
+refuses `HEAD` as a branch name.
 
 Nesting rather than flattening `/` to `_` means `feature/login` and
 `feature_login` stay distinct. Git already refuses to create a branch `main/x`
@@ -197,6 +208,9 @@ and whatever the examined repository is configured to do.
   not transferred by clone, so `--include-rewritten` finds nothing in a bare
   mirror or a fresh clone. Reflog entries also expire (`gc.reflogExpire`,
   90 days by default).
+- **Detached-head recovery needs all-branches mode.** `HEAD/` is only produced
+  when no `-b` is given: naming one branch means that branch's history. Combine
+  `--include-rewritten` with no `-b` to recover everything the reflogs remember.
 - **Submodule content is not captured.** git stores only a pointer; the pointer
   is recorded in `COMMIT_INFO.txt`.
 

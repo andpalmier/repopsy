@@ -2,56 +2,19 @@ package git
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 )
 
-// setupTestRepo creates a temporary git repository with some commits
+// setupTestRepo creates a repository with two commits, the second carrying a
+// character that has tripped up field-separated parsing before.
 func setupTestRepo(t *testing.T) *Repository {
-	dir := t.TempDir()
-
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		// GIT_AUTHOR_*/GIT_COMMITTER_* override local config, so pin them.
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=Test User", "GIT_AUTHOR_EMAIL=test@example.com",
-			"GIT_COMMITTER_NAME=Test User", "GIT_COMMITTER_EMAIL=test@example.com")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\nOutput: %s", args, err, out)
-		}
-	}
-
-	run("init")
-	run("config", "user.name", "Test User")
-	run("config", "user.email", "test@example.com")
-	// Signing must be off regardless of the machine's global git config,
-	// otherwise commit creation fails wherever commit.gpgsign is set.
-	run("config", "commit.gpgsign", "false")
-	run("config", "tag.gpgsign", "false")
-
-	// Commit 1
-	if err := os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("content1"), 0644); err != nil {
-		t.Fatalf("failed to write file1: %v", err)
-	}
-	run("add", "file1.txt")
-	run("commit", "-m", "Initial commit")
-
-	// Commit 2: Special char in subject
-	if err := os.WriteFile(filepath.Join(dir, "file2.txt"), []byte("content2"), 0644); err != nil {
-		t.Fatalf("failed to write file2: %v", err)
-	}
-	run("add", "file2.txt")
-	run("commit", "-m", "Commit with | pipe")
-
-	repo, err := Open(dir)
-	if err != nil {
-		t.Fatalf("failed to open repo: %v", err)
-	}
-
-	return repo
+	t.Helper()
+	b := newRepo(t)
+	b.Write("file1.txt", "content1", 0o644)
+	b.Commit("Initial commit")
+	b.Write("file2.txt", "content2", 0o644)
+	b.Commit("Commit with | pipe")
+	return b.open()
 }
 
 func TestListCommits(t *testing.T) {

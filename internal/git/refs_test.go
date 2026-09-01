@@ -8,16 +8,16 @@ import (
 
 func TestReflogRecordsARewrite(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "v1\n", 0o644)
-	b.commit("one")
-	b.write("f.txt", "v2\n", 0o644)
-	lost := b.commit("SENSITIVE commit that gets rewritten")
-	b.write("f.txt", "v3\n", 0o644)
-	b.commit("three")
+	b.Write("f.txt", "v1\n", 0o644)
+	b.Commit("one")
+	b.Write("f.txt", "v2\n", 0o644)
+	lost := b.Commit("SENSITIVE commit that gets rewritten")
+	b.Write("f.txt", "v3\n", 0o644)
+	b.Commit("three")
 	// A reset, as a force-push would leave behind.
-	b.git("reset", "--hard", "HEAD~2")
-	b.write("f.txt", "v3again\n", 0o644)
-	b.commit("replacement")
+	b.Git("reset", "--hard", "HEAD~2")
+	b.Write("f.txt", "v3again\n", 0o644)
+	b.Commit("replacement")
 
 	entries, err := b.open().Reflog(context.Background())
 	if err != nil {
@@ -56,12 +56,12 @@ func TestReflogRecordsARewrite(t *testing.T) {
 
 func TestReflogEmptyForAFreshBareClone(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	// Reflogs are local and are not transferred, so a bare clone has none.
 	bare := t.TempDir() + "/bare.git"
-	b.git("clone", "--bare", b.dir, bare)
+	b.Git("clone", "--bare", b.Dir, bare)
 
 	repo, err := Open(bare)
 	if err != nil {
@@ -78,13 +78,13 @@ func TestReflogEmptyForAFreshBareClone(t *testing.T) {
 
 func TestReflogTipsAreDistinct(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "v1\n", 0o644)
-	b.commit("one")
-	b.write("f.txt", "v2\n", 0o644)
-	lost := b.commit("two")
-	b.git("reset", "--hard", "HEAD~1")
+	b.Write("f.txt", "v1\n", 0o644)
+	b.Commit("one")
+	b.Write("f.txt", "v2\n", 0o644)
+	lost := b.Commit("two")
+	b.Git("reset", "--hard", "HEAD~1")
 
-	branch := b.git("rev-parse", "--abbrev-ref", "HEAD")
+	branch := b.Git("rev-parse", "--abbrev-ref", "HEAD")
 	tips, err := b.open().ReflogTips(context.Background(), branch)
 	if err != nil {
 		t.Fatalf("ReflogTips: %v", err)
@@ -104,8 +104,8 @@ func TestReflogTipsAreDistinct(t *testing.T) {
 
 func TestReflogTipsUnknownBranchIsNotAnError(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	tips, err := b.open().ReflogTips(context.Background(), "no-such-branch")
 	if err != nil {
@@ -118,10 +118,10 @@ func TestReflogTipsUnknownBranchIsNotAnError(t *testing.T) {
 
 func TestTags(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	target := b.commit("one")
-	b.git("tag", "light")
-	b.git("tag", "-a", "v1.0", "-m", "release one")
+	b.Write("f.txt", "x\n", 0o644)
+	target := b.Commit("one")
+	b.Git("tag", "light")
+	b.Git("tag", "-a", "v1.0", "-m", "release one")
 
 	tags, err := b.open().Tags(context.Background())
 	if err != nil {
@@ -178,8 +178,8 @@ func TestTags(t *testing.T) {
 
 func TestTagsNone(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	tags, err := b.open().Tags(context.Background())
 	if err != nil {

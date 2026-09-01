@@ -10,10 +10,10 @@ import (
 
 func TestReadStateCapturesHooksAndConfig(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
-	hooks := filepath.Join(b.dir, ".git", "hooks")
+	hooks := filepath.Join(b.Dir, ".git", "hooks")
 	if err := os.MkdirAll(hooks, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -69,10 +69,10 @@ func TestReadStateCapturesHooksAndConfig(t *testing.T) {
 
 func TestReadStateTruncatesAHugeHook(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
-	hooks := filepath.Join(b.dir, ".git", "hooks")
+	hooks := filepath.Join(b.Dir, ".git", "hooks")
 	if err := os.MkdirAll(hooks, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +103,9 @@ func TestReadStateTruncatesAHugeHook(t *testing.T) {
 
 func TestReadStateNoHooksDirectory(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
-	if err := os.RemoveAll(filepath.Join(b.dir, ".git", "hooks")); err != nil {
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+	if err := os.RemoveAll(filepath.Join(b.Dir, ".git", "hooks")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,8 +120,8 @@ func TestReadStateNoHooksDirectory(t *testing.T) {
 
 func TestGitDirIsResolved(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	if got := b.open().GitDir; !strings.HasSuffix(got, ".git") {
 		t.Errorf("GitDir = %q, want a path ending in .git", got)
@@ -129,7 +129,7 @@ func TestGitDirIsResolved(t *testing.T) {
 
 	// A bare repository is its own git directory.
 	bare := filepath.Join(t.TempDir(), "bare.git")
-	b.git("clone", "--bare", b.dir, bare)
+	b.Git("clone", "--bare", b.Dir, bare)
 	repo, err := Open(bare)
 	if err != nil {
 		t.Fatal(err)
@@ -141,16 +141,16 @@ func TestGitDirIsResolved(t *testing.T) {
 
 func TestRewrittenCommitsRecoversWhatAResetRemoved(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "v1\n", 0o644)
-	b.commit("one")
-	b.write("f.txt", "v2\n", 0o644)
-	lost := b.commit("SENSITIVE")
-	b.git("reset", "--hard", "HEAD~1")
-	b.write("f.txt", "v2again\n", 0o644)
-	b.commit("replacement")
+	b.Write("f.txt", "v1\n", 0o644)
+	b.Commit("one")
+	b.Write("f.txt", "v2\n", 0o644)
+	lost := b.Commit("SENSITIVE")
+	b.Git("reset", "--hard", "HEAD~1")
+	b.Write("f.txt", "v2again\n", 0o644)
+	b.Commit("replacement")
 
 	repo := b.open()
-	branch := b.git("rev-parse", "--abbrev-ref", "HEAD")
+	branch := b.Git("rev-parse", "--abbrev-ref", "HEAD")
 
 	reachable, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
 	if err != nil {
@@ -187,11 +187,11 @@ func TestRewrittenCommitsRecoversWhatAResetRemoved(t *testing.T) {
 
 func TestRewrittenCommitsEmptyWithoutAReflog(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	bare := filepath.Join(t.TempDir(), "bare.git")
-	b.git("clone", "--bare", b.dir, bare)
+	b.Git("clone", "--bare", b.Dir, bare)
 	repo, err := Open(bare)
 	if err != nil {
 		t.Fatal(err)
@@ -212,16 +212,16 @@ func TestRewrittenCommitsEmptyWithoutAReflog(t *testing.T) {
 // branch reaches and no branch reflog recovers.
 func TestRewrittenCommitsFromHeadFindsDetachedWork(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "v1\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "v1\n", 0o644)
+	b.Commit("one")
 
 	// Captured before detaching: "git branch" adds a pseudo-entry once detached.
-	branch := b.git("rev-parse", "--abbrev-ref", "HEAD")
+	branch := b.Git("rev-parse", "--abbrev-ref", "HEAD")
 
-	b.git("checkout", "--detach")
-	b.write("g.txt", "detached\n", 0o644)
-	abandoned := b.commit("DETACHED work")
-	b.git("checkout", branch)
+	b.Git("checkout", "--detach")
+	b.Write("g.txt", "detached\n", 0o644)
+	abandoned := b.Commit("DETACHED work")
+	b.Git("checkout", branch)
 
 	repo := b.open()
 
@@ -268,11 +268,11 @@ func TestRewrittenCommitsFromHeadFindsDetachedWork(t *testing.T) {
 // from being recovered more than once.
 func TestRewrittenCommitsRespectsExclusion(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "v1\n", 0o644)
-	b.commit("one")
-	b.write("f.txt", "v2\n", 0o644)
-	lost := b.commit("lost")
-	b.git("reset", "--hard", "HEAD~1")
+	b.Write("f.txt", "v1\n", 0o644)
+	b.Commit("one")
+	b.Write("f.txt", "v2\n", 0o644)
+	lost := b.Commit("lost")
+	b.Git("reset", "--hard", "HEAD~1")
 
 	repo := b.open()
 	all, err := repo.RewrittenCommits(context.Background(), "HEAD", map[string]bool{}, 0)

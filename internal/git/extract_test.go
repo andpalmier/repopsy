@@ -3,96 +3,41 @@ package git
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andpalmier/repopsy/internal/gittest"
 )
 
-// repoBuilder builds a temporary repository. Tests describe the tree they need
-// and let the builder deal with git.
-type repoBuilder struct {
-	t   *testing.T
-	dir string
+// newRepo wraps the shared builder and adds opening it as a Repository, which
+// gittest cannot do without importing this package.
+type repo struct {
+	*gittest.Repo
 }
 
-func newRepo(t *testing.T) *repoBuilder {
+func newRepo(t *testing.T) *repo {
 	t.Helper()
-	b := &repoBuilder{t: t, dir: t.TempDir()}
-	b.git("init")
-	b.git("config", "user.name", "Test User")
-	b.git("config", "user.email", "test@example.com")
-	// Independent of the machine's global git config.
-	b.git("config", "commit.gpgsign", "false")
-	return b
+	return &repo{gittest.New(t)}
 }
 
-// testIdentity pins the identity git records. GIT_AUTHOR_* and GIT_COMMITTER_*
-// environment variables override local config, and a developer machine may well
-// have them set, so relying on "git config user.name" alone makes any test that
-// asserts an identity pass locally and differ on CI.
-var testIdentity = []string{
-	"GIT_AUTHOR_NAME=Test User",
-	"GIT_AUTHOR_EMAIL=test@example.com",
-	"GIT_COMMITTER_NAME=Test User",
-	"GIT_COMMITTER_EMAIL=test@example.com",
-}
-
-func (b *repoBuilder) git(args ...string) string {
-	b.t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = b.dir
-	cmd.Env = append(os.Environ(), testIdentity...)
-	out, err := cmd.CombinedOutput()
+func (r *repo) open() *Repository {
+	repository, err := Open(r.Dir)
 	if err != nil {
-		b.t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		r.Repo.Git("status") // surface anything useful before failing
+		panic(err)
 	}
-	return strings.TrimSpace(string(out))
-}
-
-// write creates a file, making any parent directories it needs.
-func (b *repoBuilder) write(path, content string, mode os.FileMode) {
-	b.t.Helper()
-	full := filepath.Join(b.dir, path)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		b.t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(content), mode); err != nil {
-		b.t.Fatal(err)
-	}
-}
-
-func (b *repoBuilder) symlink(target, path string) {
-	b.t.Helper()
-	if err := os.Symlink(target, filepath.Join(b.dir, path)); err != nil {
-		b.t.Fatal(err)
-	}
-}
-
-func (b *repoBuilder) commit(message string) string {
-	b.t.Helper()
-	b.git("add", "-A")
-	b.git("commit", "-m", message)
-	return b.git("rev-parse", "HEAD")
-}
-
-func (b *repoBuilder) open() *Repository {
-	b.t.Helper()
-	repo, err := Open(b.dir)
-	if err != nil {
-		b.t.Fatalf("Open: %v", err)
-	}
-	return repo
+	return repository
 }
 
 func TestExtractCommit(t *testing.T) {
 	b := newRepo(t)
-	b.write("readme.md", "hello\n", 0o644)
-	b.write("src/deep/nested.go", "package deep\n", 0o644)
-	b.write("scripts/run.sh", "#!/bin/sh\necho hi\n", 0o755)
-	b.symlink("readme.md", "link.md")
-	hash := b.commit("everything")
+	b.Write("readme.md", "hello\n", 0o644)
+	b.Write("src/deep/nested.go", "package deep\n", 0o644)
+	b.Write("scripts/run.sh", "#!/bin/sh\necho hi\n", 0o755)
+	b.Symlink("readme.md", "link.md")
+	hash := b.Commit("everything")
 
 	dest := filepath.Join(t.TempDir(), "snap")
 	if _, err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
@@ -138,8 +83,8 @@ func TestExtractCommit(t *testing.T) {
 
 func TestExtractCommitCreatesDestination(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	hash := b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	hash := b.Commit("one")
 
 	// Two levels that do not exist yet.
 	dest := filepath.Join(t.TempDir(), "a", "b", "snap")
@@ -153,8 +98,8 @@ func TestExtractCommitCreatesDestination(t *testing.T) {
 
 func TestExtractCommitUnknownHash(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	dest := filepath.Join(t.TempDir(), "snap")
 	_, err := b.open().ExtractCommit(context.Background(), "0000000000000000000000000000000000000000", dest)
@@ -169,8 +114,8 @@ func TestExtractCommitUnknownHash(t *testing.T) {
 
 func TestExtractCommitCancelledContext(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	hash := b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	hash := b.Commit("one")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -183,10 +128,10 @@ func TestExtractCommitCancelledContext(t *testing.T) {
 
 func TestExtractCommitEmptyCommit(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
-	b.git("commit", "--allow-empty", "-m", "empty")
-	hash := b.git("rev-parse", "HEAD")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+	b.Git("commit", "--allow-empty", "-m", "empty")
+	hash := b.Git("rev-parse", "HEAD")
 
 	dest := filepath.Join(t.TempDir(), "snap")
 	if _, err := b.open().ExtractCommit(context.Background(), hash, dest); err != nil {
@@ -206,10 +151,10 @@ func TestExtractCommitEmptyCommit(t *testing.T) {
 // collected. See docs/adr/0005.
 func TestExtractIgnoresExportIgnore(t *testing.T) {
 	b := newRepo(t)
-	b.write("normal.txt", "public\n", 0o644)
-	b.write("secret.txt", "withheld\n", 0o644)
-	b.write(".gitattributes", "secret.txt export-ignore\n", 0o644)
-	hash := b.commit("with export-ignore")
+	b.Write("normal.txt", "public\n", 0o644)
+	b.Write("secret.txt", "withheld\n", 0o644)
+	b.Write(".gitattributes", "secret.txt export-ignore\n", 0o644)
+	hash := b.Commit("with export-ignore")
 
 	repo := b.open()
 	dest := filepath.Join(t.TempDir(), "snap")
@@ -247,14 +192,14 @@ func TestExtractIgnoresExportIgnore(t *testing.T) {
 func TestExtractRecordsSubmodulePointers(t *testing.T) {
 	// A second repository to point at.
 	inner := newRepo(t)
-	inner.write("inner.txt", "inner\n", 0o644)
-	innerHash := inner.commit("inner one")
+	inner.Write("inner.txt", "inner\n", 0o644)
+	innerHash := inner.Commit("inner one")
 
 	b := newRepo(t)
-	b.write("outer.txt", "outer\n", 0o644)
-	b.commit("outer one")
-	b.git("-c", "protocol.file.allow=always", "submodule", "add", "-q", inner.dir, "sub")
-	hash := b.commit("add submodule")
+	b.Write("outer.txt", "outer\n", 0o644)
+	b.Commit("outer one")
+	b.Git("-c", "protocol.file.allow=always", "submodule", "add", "-q", inner.Dir, "sub")
+	hash := b.Commit("add submodule")
 
 	dest := filepath.Join(t.TempDir(), "snap")
 	result, err := b.open().ExtractCommit(context.Background(), hash, dest)
@@ -298,9 +243,9 @@ func TestExtractRefusesEscapingPaths(t *testing.T) {
 func TestExtractCommitReturnsOnWriteFailure(t *testing.T) {
 	b := newRepo(t)
 	for _, name := range []string{"a.bin", "b.bin", "c.bin", "d.bin"} {
-		b.write(name, strings.Repeat("x", 80*1024), 0o644)
+		b.Write(name, strings.Repeat("x", 80*1024), 0o644)
 	}
-	hash := b.commit("big files")
+	hash := b.Commit("big files")
 
 	dest := filepath.Join(t.TempDir(), "snap")
 	// A directory where a file must go, so writing it fails.
@@ -326,10 +271,10 @@ func TestExtractCommitReturnsOnWriteFailure(t *testing.T) {
 
 func TestListBranches(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
-	b.git("branch", "feat/x")
-	b.git("branch", "zzz")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+	b.Git("branch", "feat/x")
+	b.Git("branch", "zzz")
 
 	branches, err := b.open().ListBranches(context.Background())
 	if err != nil {
@@ -357,8 +302,8 @@ func TestListBranchesEmptyRepository(t *testing.T) {
 
 func TestListBranchesCancelledContext(t *testing.T) {
 	b := newRepo(t)
-	b.write("f.txt", "x\n", 0o644)
-	b.commit("one")
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
