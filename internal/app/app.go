@@ -28,6 +28,9 @@ type Config struct {
 	Branch    string // If empty, extract all local branches
 	Verbose   bool
 
+	// IncludeRewritten also extracts commits recovered from the reflog.
+	IncludeRewritten bool
+
 	// Writer receives all terminal output. Defaults to standard error.
 	Writer io.Writer
 
@@ -41,10 +44,11 @@ type Config struct {
 // accumulator: the console summary and the extraction manifest are both
 // projections of it.
 type branchRun struct {
-	label   string // the branch as reported to the user
-	commits int
-	skipped string // why the branch produced nothing, if it did not
-	results []extractor.Result
+	label     string // the branch as reported to the user
+	commits   int
+	rewritten int    // snapshots recovered from the reflog
+	skipped   string // why the branch produced nothing, if it did not
+	results   []extractor.Result
 }
 
 // Run executes the repopsy application logic
@@ -151,10 +155,18 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 
 		results, err := extract(ctx, repo, outDir, branch, cfg, commits)
 		run.results = results
-		runs = append(runs, run)
 		if err != nil && extractionErr == nil {
 			extractionErr = err
 		}
+
+		if rewritten, err := recoverRewritten(ctx, out, repo, outDir, branch, cfg, commits); err == nil {
+			run.rewritten = len(rewritten)
+			run.results = append(run.results, rewritten...)
+		} else if extractionErr == nil {
+			extractionErr = err
+		}
+
+		runs = append(runs, run)
 	}
 
 	return runs, extractionErr
@@ -179,11 +191,39 @@ func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Reposi
 	// An explicit branch means a flat layout, so no branch is passed through.
 	results, err := extract(ctx, repo, outDir, "", cfg, commits)
 
-	return []branchRun{{
-		label:   cfg.Branch,
-		commits: len(commits),
-		results: results,
-	}}, err
+	run := branchRun{label: cfg.Branch, commits: len(commits), results: results}
+	if rewritten, rErr := recoverRewritten(ctx, out, repo, outDir, cfg.Branch, cfg, commits); rErr == nil {
+		run.rewritten = len(rewritten)
+		run.results = append(run.results, rewritten...)
+	} else if err == nil {
+		err = rErr
+	}
+
+	return []branchRun{run}, err
+}
+
+// recoverRewritten extracts commits the branch's ref once pointed at but no
+// longer reaches. Off unless asked for: the recovered set changes the snapshot
+// count, and on most repositories it is empty.
+func recoverRewritten(ctx context.Context, out *console.Console, repo *git.Repository, outDir, branch string, cfg Config, reachable []git.Commit) ([]extractor.Result, error) {
+	if !cfg.IncludeRewritten || ctx.Err() != nil {
+		return nil, nil
+	}
+
+	rewritten, err := repo.RewrittenCommits(ctx, branch, reachable, cfg.Limit)
+	if err != nil || len(rewritten) == 0 {
+		return nil, err
+	}
+
+	out.RewrittenFound(len(rewritten))
+
+	// Recovered commits belong to the branch whose reflog held them, so they go
+	// in the same directory as its reachable history.
+	nest := branch
+	if cfg.Branch != "" {
+		nest = "" // an explicit branch means a flat layout
+	}
+	return extract(ctx, repo, outDir, nest, cfg, rewritten)
 }
 
 // extract runs the extractor over one branch's commits.
@@ -230,6 +270,12 @@ func writeReports(ctx context.Context, out *console.Console, outDir string, cfg 
 		}
 	}
 
+	if state, err := repo.ReadState(); err != nil {
+		out.ReportFailed(snapshot.RepositoryState{}.Filename(), err)
+	} else {
+		reports = append(reports, snapshot.RepositoryState{State: state})
+	}
+
 	reports = append(reports, snapshot.NewIdentities(extracted(runs)))
 
 	for _, r := range reports {
@@ -255,9 +301,10 @@ func buildManifest(cfg Config, repo *git.Repository, startedAt time.Time, runs [
 
 	for _, run := range runs {
 		summary := snapshot.BranchSummary{
-			Name:    run.label,
-			Commits: run.commits,
-			Skipped: run.skipped,
+			Name:      run.label,
+			Commits:   run.commits,
+			Rewritten: run.rewritten,
+			Skipped:   run.skipped,
 		}
 		for _, r := range run.results {
 			if r.Error != nil {

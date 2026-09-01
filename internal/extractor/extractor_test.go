@@ -2,6 +2,8 @@ package extractor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,9 +90,10 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 			t.Errorf("result %d path = %q, want %q", i, r.OutputPath, want)
 		}
 
-		metadata := filepath.Join(r.OutputPath, snapshot.MetadataFilename)
-		if _, err := os.Stat(metadata); err != nil {
-			t.Errorf("result %d: missing %s: %v", i, snapshot.MetadataFilename, err)
+		for _, name := range []string{snapshot.MetadataFilename, snapshot.ChecksumFilename} {
+			if _, err := os.Stat(filepath.Join(r.OutputPath, name)); err != nil {
+				t.Errorf("result %d: missing %s: %v", i, name, err)
+			}
 		}
 	}
 
@@ -100,8 +103,8 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 5 {
-		t.Errorf("last snapshot has %d entries, want 5 (4 files + metadata)", len(entries))
+	if len(entries) != 6 {
+		t.Errorf("last snapshot has %d entries, want 6 (4 files + metadata + checksums)", len(entries))
 	}
 
 	// Progress went to the injected writer, not to the process's stderr.
@@ -173,5 +176,59 @@ func TestNewDefaultsWorkers(t *testing.T) {
 	ext := New(nil, Config{Workers: 0})
 	if ext.config.Workers < 1 {
 		t.Errorf("Workers = %d, want at least 1", ext.config.Workers)
+	}
+}
+
+// TestRunChecksumsMatchTheExtractedFiles verifies the integrity record against
+// the bytes actually on disk. A checksum file that does not match what it
+// describes is worse than none at all.
+func TestRunChecksumsMatchTheExtractedFiles(t *testing.T) {
+	repo := setupRepo(t, 3)
+	commits, err := repo.ListCommits(context.Background(), git.ListOptions{Reverse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	ext := New(repo, Config{OutputDir: outDir, Workers: 2, Writer: &strings.Builder{}})
+	results, err := ext.Run(context.Background(), commits)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, r := range results {
+		sums, err := os.ReadFile(filepath.Join(r.OutputPath, snapshot.ChecksumFilename))
+		if err != nil {
+			t.Fatalf("%s: %v", snapshot.ChecksumFilename, err)
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(sums)), "\n")
+		if len(lines) == 0 || lines[0] == "" {
+			t.Errorf("%s is empty for %s", snapshot.ChecksumFilename, r.Commit.ShortHash)
+			continue
+		}
+
+		for _, line := range lines {
+			want, path, found := strings.Cut(line, "  ")
+			if !found {
+				t.Errorf("malformed checksum line %q", line)
+				continue
+			}
+			content, err := os.ReadFile(filepath.Join(r.OutputPath, path))
+			if err != nil {
+				t.Errorf("%s named in %s but absent: %v", path, snapshot.ChecksumFilename, err)
+				continue
+			}
+			sum := sha256.Sum256(content)
+			if got := hex.EncodeToString(sum[:]); got != want {
+				t.Errorf("%s: checksum %s does not match content hash %s", path, want, got)
+			}
+		}
+
+		// The metadata and checksum files describe the tree, so they are not
+		// themselves listed.
+		if strings.Contains(string(sums), snapshot.ChecksumFilename) {
+			t.Errorf("%s lists itself", snapshot.ChecksumFilename)
+		}
 	}
 }

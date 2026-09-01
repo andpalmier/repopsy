@@ -131,8 +131,15 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 		// Only the tree listing knows which gitlinks the commit contains.
 		commit.Submodules = extracted.Submodules
 
-		if metaErr := writeMetadataFile(snapshotPath, commit); metaErr != nil {
+		if metaErr := writeSnapshotFile(snapshotPath, snapshot.MetadataFilename, func(w io.Writer) error {
+			return snapshot.WriteMetadata(w, commit)
+		}); metaErr != nil {
 			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
+		}
+		if sumErr := writeSnapshotFile(snapshotPath, snapshot.ChecksumFilename, func(w io.Writer) error {
+			return snapshot.WriteChecksums(w, extracted.Digests)
+		}); sumErr != nil && err == nil {
+			err = fmt.Errorf("extraction succeeded but checksum write failed: %w", sumErr)
 		}
 	}
 
@@ -143,20 +150,19 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 	}
 }
 
-// writeMetadataFile creates the metadata file inside a snapshot directory. The
-// snapshot module renders the contents; creating and closing the file is the
-// caller's job, which keeps the rendering reachable in tests without a
-// filesystem.
-func writeMetadataFile(snapshotPath string, c git.Commit) (err error) {
-	f, err := os.Create(filepath.Join(snapshotPath, snapshot.MetadataFilename))
+// writeSnapshotFile creates one file inside a snapshot directory. The snapshot
+// module renders the contents; creating and closing the file is the caller's
+// job, which keeps the rendering reachable in tests without a filesystem.
+func writeSnapshotFile(snapshotPath, name string, render func(io.Writer) error) (err error) {
+	f, err := os.Create(filepath.Join(snapshotPath, name))
 	if err != nil {
-		return fmt.Errorf("failed to create metadata file: %w", err)
+		return fmt.Errorf("failed to create %s: %w", name, err)
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("failed to close metadata file: %w", closeErr)
+			err = fmt.Errorf("failed to close %s: %w", name, closeErr)
 		}
 	}()
 
-	return snapshot.WriteMetadata(f, c)
+	return render(f)
 }

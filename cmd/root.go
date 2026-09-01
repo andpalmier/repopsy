@@ -26,19 +26,26 @@ const (
 A forensic tool for analyzing git repository history (Repository Autopsy) by extracting
 each commit's state into a separate folder for comparison and analysis.
 
-Any path inside a repository names the repository itself. Requires git 2.31 or newer.
+Any path inside a repository names the repository itself. Requires git 2.31 or
+newer, and nothing else at runtime.
 
 Usage:
   repopsy [flags] <repository-path>
 
-Output:
-  <output-dir>/EXTRACTION.txt    provenance of the run: tool build, times, scope,
-                                 per-branch counts and any failures
-  <snapshot>/COMMIT_INFO.txt     forensic record of one commit: identity and tree
-                                 hash, refs, dates with the offset git recorded,
-                                 signature and signer identity, lineage, changed
-                                 files with modes and status, anomalies, message
-  <snapshot>/...                 that commit's complete working tree
+Output, at the root:
+  EXTRACTION.txt   provenance: tool build, times, scope, per-branch counts, failures
+  REFLOG.txt       every recorded ref movement - the record of rewritten history
+  TAGS.txt         tags, with the tagger identity and signature of annotated ones
+  IDENTITIES.txt   distinct name/email pairs, and collisions between them
+  REPOSITORY.txt   local config and installed hooks, neither of them versioned
+
+Output, in each snapshot:
+  COMMIT_INFO.txt  the commit's forensic record: identity and tree hash, refs,
+                   dates with the offset git recorded, signature and signer,
+                   lineage, changed files with modes and status, submodule
+                   pointers, anomalies, message and notes
+  SHA256SUMS       SHA-256 of every extracted file, for "sha256sum -c"
+  ...              that commit's complete working tree
 
   Snapshot directories are named <timestamp>_<short-hash>, timestamped in the
   offset the commit records, so output is identical on any host. Branch names
@@ -56,6 +63,9 @@ Examples:
 
   # Explode with verbose output
   repopsy -v .
+
+  # Also recover commits a reset or force-push left unreachable
+  repopsy --include-rewritten .
 
 Flags:
 `
@@ -95,6 +105,8 @@ func newFlagSet(o *options) *flag.FlagSet {
 	alias(fs.IntVar, &o.cfg.Limit, "n", "limit", 0, "Maximum number of commits to extract (0 = all)")
 	alias(fs.StringVar, &o.cfg.Branch, "b", "branch", "", "Branch to extract from (default: all local branches)")
 	alias(fs.BoolVar, &o.cfg.Verbose, "v", "verbose", false, "Show detailed output per commit")
+	fs.BoolVar(&o.cfg.IncludeRewritten, "include-rewritten", false,
+		"Also extract commits recovered from the reflog that no branch reaches")
 	alias(fs.BoolVar, &o.showHelp, "h", "help", false, "Show help message")
 	fs.BoolVar(&o.showVersion, "version", false, "Show version information")
 

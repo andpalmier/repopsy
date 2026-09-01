@@ -44,6 +44,10 @@ type Commit struct {
 	Insertions   int
 	Deletions    int
 
+	// Unreachable marks a commit no branch reaches any more, recovered from the
+	// reflog. Its presence is itself evidence that history was rewritten.
+	Unreachable bool
+
 	// Submodules present in this commit's tree. Filled in at extraction time,
 	// since the commit log describes changes rather than the whole tree.
 	Submodules []Submodule

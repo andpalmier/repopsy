@@ -106,6 +106,12 @@ func (c *Console) BranchStarted(index, total int, name string) {
 	fmt.Fprintf(c.w, "Branch [%d/%d]: %s\n", index, total, name)
 }
 
+// RewrittenFound reports commits recovered from the reflog, whose existence is
+// itself evidence that history was rewritten.
+func (c *Console) RewrittenFound(n int) {
+	fmt.Fprintf(c.w, "  Recovered %d unreachable commits from the reflog\n", n)
+}
+
 // BranchListFailed reports that a branch's commits could not be listed.
 func (c *Console) BranchListFailed(branch string, err error) {
 	c.warnf("Failed to list commits on %s: %v", branch, err)

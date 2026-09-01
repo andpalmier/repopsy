@@ -270,3 +270,43 @@ Names used with more than one email:
 {{if .SharedNames}}{{range .SharedNames}}  {{.}}
 {{end}}{{else}}  (none)
 {{end}}`))
+
+// ── Repository state ────────────────────────────────────────────────────────
+
+// RepositoryState records the parts of a repository that are not versioned, so
+// no commit walk reaches them.
+type RepositoryState struct {
+	State git.State
+}
+
+func (RepositoryState) Filename() string { return "REPOSITORY.txt" }
+
+func (r RepositoryState) Render(w io.Writer) error {
+	return render(w, repositoryStateTemplate, r.Filename(), r)
+}
+
+var repositoryStateTemplate = template.Must(template.New("state").Funcs(reportFuncs).Parse(
+	`REPOSITORY STATE
+===========================
+
+The repository's local configuration and installed hooks. Neither is versioned,
+so no commit contains them and no amount of history walking reveals them. A hook
+is an executable git runs on repository events, which makes a malicious one a
+real attack and an unexpected one worth explaining.
+
+Hooks that git ships as inert *.sample files are omitted.
+
+CONFIGURATION
+-------------
+{{if .State.Config}}{{.State.Config}}{{else}}(no local configuration file)
+{{end}}
+HOOKS
+-----
+{{if .State.Hooks}}{{range .State.Hooks}}{{.Name}}
+  Size:         {{.Size}} bytes
+  SHA-256:      {{.SHA256}}
+  Executable:   {{if .Executable}}yes{{else}}no - git will not run it{{end}}
+  Content:{{if .Truncated}} (truncated){{end}}
+{{.Content}}
+{{end}}{{else}}(no hooks installed)
+{{end}}`))

@@ -15,6 +15,10 @@ type ListOptions struct {
 	Branch  string
 	Limit   int
 	Reverse bool
+
+	// Tips walks history from these commits instead of from a branch. Passed on
+	// stdin, so a long reflog cannot overflow the argument list.
+	Tips []string
 }
 
 const (
@@ -90,12 +94,18 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) ([]Commi
 	if opts.Reverse {
 		args = append(args, "--reverse")
 	}
-	if opts.Branch != "" {
+	switch {
+	case len(opts.Tips) > 0:
+		args = append(args, "--stdin")
+	case opts.Branch != "":
 		args = append(args, opts.Branch)
 	}
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = r.Path
+	if len(opts.Tips) > 0 {
+		cmd.Stdin = strings.NewReader(strings.Join(opts.Tips, "\n") + "\n")
+	}
 
 	output, err := cmd.Output()
 	if err != nil {
@@ -277,4 +287,36 @@ func parseNumstatLine(line string) (FileChange, bool) {
 	f.Insertions, _ = strconv.Atoi(fields[0])
 	f.Deletions, _ = strconv.Atoi(fields[1])
 	return f, true
+}
+
+// RewrittenCommits returns commits a branch's ref once pointed at but no longer
+// reaches — what a reset or force-push replaced.
+//
+// Reflogs are local and are not transferred by clone, so this is empty for a
+// bare repository or a fresh clone however much history was rewritten upstream.
+func (r *Repository) RewrittenCommits(ctx context.Context, branch string, reachable []Commit, limit int) ([]Commit, error) {
+	tips, err := r.ReflogTips(ctx, branch)
+	if err != nil || len(tips) == 0 {
+		return nil, err
+	}
+
+	fromReflog, err := r.ListCommits(ctx, ListOptions{Tips: tips, Limit: limit, Reverse: true})
+	if err != nil {
+		return nil, err
+	}
+
+	current := make(map[string]bool, len(reachable))
+	for _, c := range reachable {
+		current[c.Hash] = true
+	}
+
+	var rewritten []Commit
+	for _, c := range fromReflog {
+		if current[c.Hash] {
+			continue
+		}
+		c.Unreachable = true
+		rewritten = append(rewritten, c)
+	}
+	return rewritten, nil
 }

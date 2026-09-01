@@ -20,14 +20,18 @@ How It Works:
 1. Resolves the path to its repository root and validates it
 2. Lists commits, gathering every metadata field in a single `git log`
 3. Creates worker goroutines
-4. Each worker uses `git archive | tar -x` for efficient extraction
-5. Writes a forensic record to each folder in `COMMIT_INFO.txt`
-6. Writes a provenance record for the whole run in `EXTRACTION.txt`
+4. Each worker reads the commit's tree with `git ls-tree` and `git cat-file`
+5. Writes a forensic record and a checksum record to each snapshot
+6. Writes the reflog, tags, identities, repository state and run provenance
 
 Any path inside a repository names the repository itself, so `repopsy .` behaves
 the same from any subdirectory. Bare repositories are supported.
 
-Requires `git` 2.31 or newer.
+Trees are read directly rather than through `git archive`, because `git archive`
+honours `export-ignore` — which would let a repository withhold files from its
+own snapshot. `tar` is not required.
+
+Requires `git` 2.31 or newer. No other runtime dependency.
 
 ## Installation
 
@@ -99,6 +103,7 @@ repopsy .
 | `-n`, `--limit` | Maximum number of commits to extract | 0 (all) |
 | `-b`, `--branch` | Branch to extract from | all local branches |
 | `-v`, `--verbose` | Show detailed output per commit | false |
+| `--include-rewritten` | Also extract commits recovered from the reflog that no branch reaches | false |
 | `-h`, `--help` | Show help message | false |
 | `--version` | Show version information | false |
 
@@ -136,9 +141,14 @@ branch containing `/` nests, mirroring its ref path:
 ```
 <repo>-exploded/
 ├── EXTRACTION.txt                <- provenance for the whole run
+├── REFLOG.txt                    <- every recorded ref movement
+├── TAGS.txt                      <- tags and their attestations
+├── IDENTITIES.txt                <- who appears in the history
+├── REPOSITORY.txt                <- local config and installed hooks
 ├── main/
 │   ├── 20231205_143022_abc1234/
 │   │   ├── COMMIT_INFO.txt
+│   │   ├── SHA256SUMS
 │   │   └── ... (source files)
 │   └── 20231205_150000_def5678/
 ├── feature/
@@ -156,8 +166,10 @@ When extracting a single branch:
 ```
 <repo>-exploded/
 ├── EXTRACTION.txt
+├── (and the other root records)
 ├── 20231205_143022_abc1234/
 │   ├── COMMIT_INFO.txt
+│   ├── SHA256SUMS
 │   └── ... (source files)
 └── 20231205_150000_def5678/
 ```
@@ -174,9 +186,60 @@ repository always explodes into the same directory names on any host.
   repository containing such a branch will fail on Windows. Linux and macOS are
   unaffected.
 - **"All branches" means local branches.** Only `refs/heads/` is listed;
-  remote-tracking refs and tags are not extracted. On a fresh clone that is
-  usually a single branch — fetch or check out the branches you want first, or
-  pass `-b`.
+  remote-tracking refs are not extracted. Tags are recorded in `TAGS.txt` but
+  their targets are only extracted if a branch reaches them. On a fresh clone
+  this is usually a single branch — fetch or check out the branches you want
+  first, or pass `-b`.
+- **Reflog recovery needs the original repository.** Reflogs are local and are
+  not transferred by clone, so `--include-rewritten` finds nothing in a bare
+  mirror or a fresh clone. Reflog entries also expire (`gc.reflogExpire`,
+  90 days by default).
+- **Submodule content is not captured.** git stores only a pointer; the pointer
+  is recorded in `COMMIT_INFO.txt`.
+
+## Root Records
+
+Alongside the snapshots, repopsy writes five records describing things no single
+commit contains.
+
+**`EXTRACTION.txt`** — provenance of the run: which repopsy build produced it,
+start and finish, scope, worker count and limit, per-branch commits against
+snapshots written, and any failures with reasons.
+
+**`REFLOG.txt`** — every recorded movement of every ref: what moved, to what,
+when, by whom, and git's own description of why. A reset or force-push leaves the
+commits it replaced unreachable, so this is the record of history that was
+rewritten away. Reflogs are **local and are not transferred by clone**, so this
+is empty for a bare mirror or a fresh clone however much was rewritten upstream —
+an empty log is not proof that nothing happened.
+
+**`TAGS.txt`** — every tag with its target. An annotated tag also carries its own
+tagger identity, date and signature, which is an attestation separate from the
+commit it points at.
+
+**`IDENTITIES.txt`** — every distinct name and email pair, with per-role counts
+and first and last seen, plus collisions: one email under several names, or one
+name under several emails. Invisible commit by commit, and how both impersonation
+and a reconfigured client look.
+
+**`REPOSITORY.txt`** — the repository's local configuration verbatim and its
+installed hooks, with each hook's size, SHA-256, executable bit and content.
+Neither is versioned, so no commit contains them; a malicious hook is a real
+attack and never appears in any history walk.
+
+## Integrity
+
+Every snapshot contains a `SHA256SUMS` listing the SHA-256 of each extracted
+file, in the format `sha256sum -c` reads:
+
+```bash
+cd <repo>-exploded/main/20231205_143022_abc1234
+sha256sum -c SHA256SUMS
+```
+
+Together with `EXTRACTION.txt` this closes the chain of custody: the manifest
+says how the snapshots were produced, and the checksums show they have not been
+altered since.
 
 ## Forensic Record
 
@@ -211,9 +274,14 @@ explicitly: `100644 -> 100755` means a file became executable.
 commit is measured the same way, so changes brought in from the other side of
 the merge are not counted twice.
 
+**Submodules** — a gitlink records only a pointer to a commit in another
+repository, so the content cannot be in the snapshot. The pointer and its target
+are recorded rather than the entry being silently omitted.
+
 **Anomalies** — a commit whose author date is *later* than its committer date is
-flagged. This does not occur in normal use and indicates a rewritten or forged
-date.
+flagged; this does not occur in normal use and indicates a rewritten or forged
+date. A commit recovered with `--include-rewritten` is flagged as unreachable,
+which is itself evidence that history was rewritten after it was made.
 
 **Message and notes** — subject, full message, declared encoding, and any git
 notes attached to the commit.

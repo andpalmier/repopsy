@@ -15,6 +15,11 @@ import (
 type Repository struct {
 	// Path is the absolute path to the repository root
 	Path string
+
+	// GitDir is the absolute path to the repository's git directory, which is
+	// Path/.git for a work tree and Path itself for a bare repository. Its
+	// contents are not versioned, so no commit walk reaches them.
+	GitDir string
 }
 
 // Open opens and validates the git repository containing path.
@@ -42,7 +47,11 @@ func Open(path string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Repository{Path: root}, nil
+
+	// Best effort: everything except the repository-state record works without it.
+	gitDir, _ := gitOutput(context.Background(), root, "rev-parse", "--absolute-git-dir")
+
+	return &Repository{Path: root, GitDir: gitDir}, nil
 }
 
 // resolveRoot finds the root repopsy should treat dir as naming. git resolves

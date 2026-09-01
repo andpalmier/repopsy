@@ -22,6 +22,9 @@ const (
 	// MetadataFilename is the metadata file written inside every snapshot.
 	MetadataFilename = "COMMIT_INFO.txt"
 
+	// ChecksumFilename is the integrity record written inside every snapshot.
+	ChecksumFilename = "SHA256SUMS"
+
 	// timestampFormat names a snapshot directory: 20231205_143022_abc1234.
 	timestampFormat = "20060102_150405"
 
@@ -70,6 +73,18 @@ func WriteMetadata(w io.Writer, c git.Commit) error {
 	return nil
 }
 
+// WriteChecksums records the SHA-256 of every extracted file, in the format
+// "sha256sum -c" reads, so a reader can verify the snapshot was not altered
+// after extraction. Paths are relative to the snapshot directory.
+func WriteChecksums(w io.Writer, digests []git.FileDigest) error {
+	for _, d := range digests {
+		if _, err := fmt.Fprintf(w, "%s  %s\n", d.SHA256, d.Path); err != nil {
+			return fmt.Errorf("failed to write checksums: %w", err)
+		}
+	}
+	return nil
+}
+
 var metadataTemplate = template.Must(template.New("metadata").Funcs(reportFuncs).Funcs(template.FuncMap{
 	"formatGPGStatus": formatGPGStatus,
 	"fileLine":        fileLine,
@@ -99,6 +114,9 @@ Date:           {{.CommitDate | formatDate}}
 Timestamp:      {{.CommitDate.Unix}}
 {{if ne .Author .Committer}}
 NOTE: Author and Committer are different.
+{{end}}{{if .Unreachable}}
+NOTE: no branch reaches this commit. It was recovered from the reflog, so
+history was rewritten after it was made.
 {{end}}{{if .Backdated}}
 ANOMALY: the author date is later than the committer date. This does not
 occur in normal use and indicates a rewritten or forged date.

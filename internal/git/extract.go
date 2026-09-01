@@ -4,6 +4,8 @@ package git
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -41,6 +43,17 @@ type ExtractResult struct {
 
 	// Submodules are the gitlinks encountered, whose content is not captured.
 	Submodules []Submodule
+
+	// Digests is the SHA-256 of every file written, in tree order. The bytes
+	// pass through this process anyway, so hashing them is nearly free — and it
+	// lets a reader prove the snapshot was not altered after extraction.
+	Digests []FileDigest
+}
+
+// FileDigest is one extracted file and the hash of its content.
+type FileDigest struct {
+	Path   string
+	SHA256 string
 }
 
 // treeEntry is one row of git ls-tree output.
@@ -160,6 +173,8 @@ func (r *Repository) writeTree(ctx context.Context, destPath string, entries []t
 		if err := writeEntry(destPath, e, content); err != nil {
 			return result, err
 		}
+		sum := sha256.Sum256(content)
+		result.Digests = append(result.Digests, FileDigest{Path: e.path, SHA256: hex.EncodeToString(sum[:])})
 		result.Files++
 	}
 

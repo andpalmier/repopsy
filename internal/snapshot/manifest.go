@@ -35,7 +35,12 @@ type BranchSummary struct {
 	Name      string
 	Commits   int
 	Extracted int
-	Skipped   string // why the branch produced nothing, if it did not
+
+	// Rewritten counts snapshots recovered from the reflog, which no branch
+	// reaches any more.
+	Rewritten int
+
+	Skipped string // why the branch produced nothing, if it did not
 }
 
 // Failure is one snapshot that could not be produced.
@@ -117,7 +122,11 @@ func branchLine(b BranchSummary) string {
 	if b.Skipped != "" {
 		return fmt.Sprintf("%-40s %s", b.Name, b.Skipped)
 	}
-	return fmt.Sprintf("%-40s %d commits, %d snapshots", b.Name, b.Commits, b.Extracted)
+	line := fmt.Sprintf("%-40s %d commits, %d snapshots", b.Name, b.Commits, b.Extracted)
+	if b.Rewritten > 0 {
+		line += fmt.Sprintf(" (%d recovered from the reflog)", b.Rewritten)
+	}
+	return line
 }
 
 // failureLine renders one failed snapshot.
