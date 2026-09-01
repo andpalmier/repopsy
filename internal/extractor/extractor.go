@@ -1,4 +1,6 @@
-// Package extractor runs the extraction of many commits concurrently.
+// Package extractor extracts many commits concurrently, bounded by a worker
+// count, and reports one result per commit in commit order however the workers
+// interleave.
 package extractor
 
 import (
@@ -36,14 +38,14 @@ type Config struct {
 	Writer io.Writer
 }
 
-// Result represents the outcome of a single commit
+// Result is the outcome of extracting one commit.
 type Result struct {
 	Commit     git.Commit
 	OutputPath string
 	Error      error
 }
 
-// Extractor coordinates the extraction of multiple commits using a worker pool
+// Extractor extracts many commits concurrently, bounded by a worker count.
 type Extractor struct {
 	repo   *git.Repository
 	config Config
@@ -120,7 +122,7 @@ func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, er
 	return results, nil
 }
 
-// extractOne extracts a single commit and returns the result
+// extractOne extracts one commit and writes its snapshot's records.
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
 

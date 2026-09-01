@@ -77,8 +77,10 @@ type Reflog struct {
 	Entries []git.ReflogEntry
 }
 
+// Filename implements Report.
 func (Reflog) Filename() string { return "REFLOG.txt" }
 
+// Render writes the ref movement log.
 func (r Reflog) Render(w io.Writer) error {
 	return render(w, reflogTemplate, r.Filename(), r)
 }
@@ -110,8 +112,10 @@ type Tags struct {
 	Tags []git.Tag
 }
 
+// Filename implements Report.
 func (Tags) Filename() string { return "TAGS.txt" }
 
+// Render writes the tag record.
 func (t Tags) Render(w io.Writer) error {
 	return render(w, tagsTemplate, t.Filename(), t)
 }
@@ -162,8 +166,10 @@ type Identities struct {
 	SharedNames  []string
 }
 
+// Filename implements Report.
 func (Identities) Filename() string { return "IDENTITIES.txt" }
 
+// Render writes the identity record.
 func (i Identities) Render(w io.Writer) error {
 	return render(w, identitiesTemplate, i.Filename(), i)
 }
@@ -279,8 +285,10 @@ type RepositoryState struct {
 	State git.State
 }
 
+// Filename implements Report.
 func (RepositoryState) Filename() string { return "REPOSITORY.txt" }
 
+// Render writes the repository state record.
 func (r RepositoryState) Render(w io.Writer) error {
 	return render(w, repositoryStateTemplate, r.Filename(), r)
 }

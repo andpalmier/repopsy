@@ -223,8 +223,8 @@ and whatever the examined repository is configured to do.
 
 ## Root Records
 
-Alongside the snapshots, repopsy writes five records describing things no single
-commit contains.
+Alongside the snapshots, repopsy writes five **root records** describing the run
+rather than any single commit.
 
 **`EXTRACTION.txt`** — provenance of the run: which repopsy build produced it,
 start and finish, scope, worker count and limit, per-branch commits against
@@ -253,8 +253,8 @@ attack and never appears in any history walk.
 
 ## Integrity
 
-Every snapshot contains a `SHA256SUMS` listing the SHA-256 of each extracted
-file, in the format `sha256sum -c` reads:
+Every snapshot contains an **integrity record**, `SHA256SUMS`, listing the
+SHA-256 of each extracted file in the format `sha256sum -c` reads:
 
 ```bash
 cd <repo>-exploded/main/20231205_143022_abc1234
@@ -291,14 +291,19 @@ if only the verdict is recorded.
 
 **Changed files** — every path the commit touched, with its status letter
 (`A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `T` type
-changed), line counts, the blob hash of the new content, and both file modes. A
-mode change is called out explicitly: `100644 -> 100755` means a file became
-executable. The blob hash names the content in the object store, so it can be
-retrieved and verified against the original repository:
+changed), line counts, a blob hash, and both file modes. A mode change is called
+out explicitly: `100644 -> 100755` means a file became executable.
+
+The blob hash names the content in the object store, so it can be retrieved and
+verified against the original repository:
 
 ```bash
 git cat-file -p 615eb37b3006
 ```
+
+For a deletion the hash is the **removed** content's, since that is the only
+pointer left to what the file contained — git reports a deletion with an
+all-zero new blob, so recording that instead would lose it.
 
 **Change statistics** are measured against the commit's first parent. A merge
 commit is measured the same way, so changes brought in from the other side of
@@ -368,6 +373,7 @@ Status, line counts, the new content's blob hash, and the path.
 M    +1      -1      9817e7ca8f21 go.mod
 M    +4      -2      bbb2222aaa11 scripts/deploy.sh  [mode 100644 -> 100755]
 A    binary          ccc3333ddd44 demo.gif
+D    +0      -99     ddd4444eee55 old/removed.go
 
 COMMIT MESSAGE
 --------------

@@ -1,11 +1,10 @@
-// Package snapshot decides what a snapshot is called and what metadata it
-// carries. A snapshot is one commit's complete working tree written to its own
-// directory, alongside that commit's metadata.
+// Package snapshot decides everything about the shape of an exploded
+// repository: what a snapshot directory is called, what records go inside it,
+// and what records describe the run as a whole.
 //
-// Naming and metadata used to be split across three packages — the branch
-// directory in app, the commit directory in extractor, and the metadata file in
-// git. This package owns all three, so git no longer knows what the output
-// looks like.
+// It owns all of it so that no other package needs an opinion about the output.
+// Rendering goes to an io.Writer and never to a path, so every record is
+// reachable in a test without a filesystem.
 package snapshot
 
 import (

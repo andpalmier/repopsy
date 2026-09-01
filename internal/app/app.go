@@ -25,7 +25,7 @@ const (
 	detachedHeadDir = "HEAD"
 )
 
-// Config holds the application configuration
+// Config holds everything one run needs, resolved from the command line.
 type Config struct {
 	RepoPath  string
 	OutputDir string
@@ -56,7 +56,7 @@ type branchRun struct {
 	results []extractor.Result
 }
 
-// Run executes the repopsy application logic
+// Run explodes the repository described by cfg.
 func Run(ctx context.Context, cfg Config) error {
 	out := console.New(cfg.Writer)
 	startedAt := time.Now()

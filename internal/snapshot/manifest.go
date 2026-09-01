@@ -64,6 +64,7 @@ func (m Manifest) Duration() string {
 	return m.FinishedAt.Sub(m.StartedAt).Round(time.Millisecond).String()
 }
 
+// Filename implements Report.
 func (Manifest) Filename() string { return "EXTRACTION.txt" }
 
 // Render writes the provenance record.

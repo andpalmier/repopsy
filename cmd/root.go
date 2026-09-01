@@ -1,3 +1,5 @@
+// Package cmd is repopsy's command line: it parses arguments, reports failures,
+// and hands a resolved configuration to the app package.
 package cmd
 
 import (
@@ -42,8 +44,8 @@ Output, at the root:
 Output, in each snapshot:
   COMMIT_INFO.txt  the commit's forensic record: identity and tree hash, refs,
                    dates with the offset git recorded, signature and signer,
-                   lineage, changed files with modes and status, submodule
-                   pointers, anomalies, message and notes
+                   lineage, changed files with blob hashes, modes and status,
+                   submodule pointers, anomalies, message and notes
   SHA256SUMS       SHA-256 of every extracted file, for "sha256sum -c"
   ...              that commit's complete working tree
 

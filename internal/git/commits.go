@@ -1,4 +1,3 @@
-// Package git provides functionality for interacting with git repositories.
 package git
 
 import (
@@ -10,7 +9,7 @@ import (
 	"time"
 )
 
-// ListOptions configures how commits are listed from the repository
+// ListOptions selects which commits ListCommits returns, and in what order.
 type ListOptions struct {
 	Branch  string
 	Limit   int

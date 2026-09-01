@@ -1,4 +1,8 @@
-// Package git provides functionality for interacting with git repositories
+// Package git reads a git repository through the git command line: its refs,
+// its commits, its trees, and the unversioned state around them.
+//
+// Nothing here knows what repopsy's output looks like. Rendering and naming
+// belong to the snapshot package.
 package git
 
 import (
