@@ -62,6 +62,20 @@ homebrew_casks:
     directory: Casks
     homepage: "https://github.com/andpalmier/repopsy"
     description: "Forensic tool for analyzing git repository history"
+    # Homebrew quarantines what a cask downloads, and these binaries are neither
+    # signed nor notarized, so macOS would refuse to run them with "repopsy is
+    # damaged and cannot be opened". Formulae did not have this problem, so this
+    # is required by the move to casks rather than optional.
+    #
+    # This clears Gatekeeper's quarantine attribute, which is a bypass: Apple may
+    # withdraw it, and signing plus notarization is the durable answer. Doing
+    # that needs an Apple Developer account, so it is a separate decision.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/repopsy"]
+          end
 
 # Replaces the deprecated "dockers" and "docker_manifests" sections. One entry
 # now covers both architectures: dockers_v2 runs "docker buildx build" across
