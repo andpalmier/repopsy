@@ -87,7 +87,7 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 		return fmt.Errorf("no branches found")
 	}
 
-	out.Warnf("Extracting from %d local branches - this may take some time and memory!\n", len(branches))
+	out.BranchesFound(len(branches))
 
 	var outcomes []console.Outcome
 	var extractionErr error
@@ -97,7 +97,7 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 			return ctx.Err()
 		}
 
-		out.Infof("Branch [%d/%d]: %s", i+1, len(branches), branch)
+		out.BranchStarted(i+1, len(branches), branch)
 
 		commits, err := repo.ListCommits(ctx, git.ListOptions{
 			Branch:  branch,
@@ -105,14 +105,14 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 			Reverse: true,
 		})
 		if err != nil {
-			out.Warnf("Failed to list commits on %s: %v", branch, err)
+			out.BranchListFailed(branch, err)
 			continue
 		}
 		if len(commits) == 0 {
-			out.Infof("  (no commits)")
+			out.BranchEmpty()
 			continue
 		}
-		out.Infof("  Found %d commits", len(commits))
+		out.BranchCommits(len(commits))
 
 		results, err := extract(ctx, repo, outDir, branch, cfg, commits)
 		outcomes = append(outcomes, toOutcomes(results)...)
@@ -139,7 +139,7 @@ func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Reposi
 		return fmt.Errorf("no commits found")
 	}
 
-	out.Infof("Found %d commits to extract\n", len(commits))
+	out.CommitsToExtract(len(commits))
 
 	// An explicit branch means a flat layout, so no branch is passed through.
 	results, err := extract(ctx, repo, outDir, "", cfg, commits)

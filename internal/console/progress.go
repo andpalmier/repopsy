@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/schollz/progressbar/v3"
@@ -28,19 +29,32 @@ func NewProgress(w io.Writer, total int, verbose bool) *Progress {
 		w = os.Stderr
 	}
 
+	// progressbar only translates the [green]…[reset] markup when colour codes
+	// are enabled, and prints it literally otherwise — so the theme has to match
+	// the decision. Enabling it unconditionally wrote raw escapes into
+	// redirected output.
+	colored := supportsColor(w)
+	description := "Extracting"
+	theme := progressbar.Theme{
+		Saucer:        "=",
+		SaucerHead:    ">",
+		SaucerPadding: " ",
+		BarStart:      "[",
+		BarEnd:        "]",
+	}
+	if colored {
+		description = "[cyan]Extracting[reset]"
+		theme.Saucer = "[green]=[reset]"
+		theme.SaucerHead = "[green]>[reset]"
+	}
+
 	bar := progressbar.NewOptions(total,
 		progressbar.OptionSetWriter(w),
-		progressbar.OptionEnableColorCodes(true),
+		progressbar.OptionEnableColorCodes(colored),
 		progressbar.OptionShowBytes(false),
 		progressbar.OptionSetWidth(30),
-		progressbar.OptionSetDescription("[cyan]Extracting[reset]"),
-		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer:        "[green]=[reset]",
-			SaucerHead:    "[green]>[reset]",
-			SaucerPadding: " ",
-			BarStart:      "[",
-			BarEnd:        "]",
-		}),
+		progressbar.OptionSetDescription(description),
+		progressbar.OptionSetTheme(theme),
 		progressbar.OptionOnCompletion(func() {
 			_, _ = fmt.Fprint(w, "\n")
 		}),
@@ -49,8 +63,20 @@ func NewProgress(w io.Writer, total int, verbose bool) *Progress {
 	return &Progress{bar: bar, verbose: verbose, writer: w}
 }
 
-// Increment advances the bar by one item. Safe for concurrent use.
-func (p *Progress) Increment(message string) {
+// Done records a commit extracted successfully. How much of the path to show is
+// a presentation decision, so the caller passes all of it.
+func (p *Progress) Done(shortHash, snapshotPath string) {
+	p.increment(fmt.Sprintf("✓ %s → %s", shortHash, filepath.Base(snapshotPath)))
+}
+
+// Failed records a commit that could not be extracted.
+func (p *Progress) Failed(shortHash string, err error) {
+	p.increment(fmt.Sprintf("✗ %s: %v", shortHash, err))
+}
+
+// increment advances the bar by one item, printing message when verbose.
+// Safe for concurrent use.
+func (p *Progress) increment(message string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

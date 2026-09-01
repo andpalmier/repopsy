@@ -1,0 +1,7 @@
+
+⚠ Completed with errors: 1 succeeded, 2 failed
+Failed commits:
+  - bbb2222: git archive failed
+  - ccc3333: tar extraction failed
+
+➜ Output: /out/demo-exploded

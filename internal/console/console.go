@@ -1,9 +1,8 @@
-// Package console owns every byte repopsy writes to the terminal.
+// Package console owns every byte repopsy writes to the terminal — the words,
+// the indentation, the glyphs and the colour, not just the writer.
 //
-// Output formatting used to be split between this package, which drew the
-// progress bar, and app, which printed the banner, the per-branch lines and the
-// summary directly to os.Stderr. Changing how the tool looked meant editing
-// both. It all lives here now, behind one io.Writer.
+// Callers name what happened; they never supply layout. That way changing how
+// the tool looks means editing this package and nothing else.
 package console
 
 import (
@@ -12,11 +11,13 @@ import (
 	"os"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 )
 
 // Console writes repopsy's human-facing output.
 type Console struct {
-	w io.Writer
+	w     io.Writer
+	color bool
 }
 
 // New returns a Console writing to w, defaulting to standard error.
@@ -24,19 +25,38 @@ func New(w io.Writer) *Console {
 	if w == nil {
 		w = os.Stderr
 	}
-	return &Console{w: w}
+	return &Console{w: w, color: supportsColor(w)}
 }
 
-// Writer exposes the underlying writer so the progress bar can share it.
-func (c *Console) Writer() io.Writer { return c.w }
+// supportsColor reports whether w is a terminal that can render escapes.
+//
+// Colour has to follow the stream actually being written to. fatih/color's
+// global decides from os.Stdout, but repopsy writes everything to os.Stderr, so
+// the two disagree whenever exactly one of them is redirected.
+func supportsColor(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
 
-var (
-	cyan    = color.New(color.FgCyan, color.Bold).SprintFunc()
-	magenta = color.New(color.FgMagenta, color.Bold).SprintFunc()
-	yellow  = color.New(color.FgYellow, color.Bold).SprintFunc()
-	red     = color.New(color.FgRed, color.Bold).SprintFunc()
-	green   = color.New(color.FgGreen, color.Bold).SprintFunc()
-)
+// tint colours s, or returns it unchanged when this Console has colour off.
+// The Color instance is switched on explicitly so it obeys supportsColor rather
+// than fatih/color's process-wide guess.
+func (c *Console) tint(attr color.Attribute, s string) string {
+	if !c.color {
+		return s
+	}
+	col := color.New(attr, color.Bold)
+	col.EnableColor()
+	return col.Sprint(s)
+}
+
+// warnf prints a warning line prefixed with the shared marker.
+func (c *Console) warnf(format string, args ...any) {
+	fmt.Fprintf(c.w, "%s %s\n", c.tint(color.FgYellow, "⚠"), fmt.Sprintf(format, args...))
+}
 
 // Header describes the run that is about to start.
 type Header struct {
@@ -50,13 +70,17 @@ type Header struct {
 // Banner prints the startup banner and the resolved configuration.
 func (c *Console) Banner(h Header) {
 	fmt.Fprintln(c.w, "")
-	fmt.Fprintln(c.w, cyan("┌─────────────────────────────────────────┐"))
-	fmt.Fprintln(c.w, cyan("│                 repopsy                 │"))
-	fmt.Fprintln(c.w, cyan("│ Repository Autopsy tool by @andpalmier  │"))
-	fmt.Fprintln(c.w, cyan("└─────────────────────────────────────────┘"))
+	for _, line := range []string{
+		"┌─────────────────────────────────────────┐",
+		"│                 repopsy                 │",
+		"│ Repository Autopsy tool by @andpalmier  │",
+		"└─────────────────────────────────────────┘",
+	} {
+		fmt.Fprintln(c.w, c.tint(color.FgCyan, line))
+	}
 	fmt.Fprintln(c.w, "")
 
-	fmt.Fprintf(c.w, "Repository:  %s\n", magenta(h.RepoPath))
+	fmt.Fprintf(c.w, "Repository:  %s\n", c.tint(color.FgMagenta, h.RepoPath))
 	if h.Branch != "" {
 		fmt.Fprintf(c.w, "Branch:      %s\n", h.Branch)
 	} else {
@@ -72,14 +96,34 @@ func (c *Console) Banner(h Header) {
 	fmt.Fprintln(c.w, "")
 }
 
-// Warnf prints a warning line prefixed with a marker.
-func (c *Console) Warnf(format string, args ...any) {
-	fmt.Fprintf(c.w, "%s %s\n", yellow("⚠"), fmt.Sprintf(format, args...))
+// BranchesFound announces how many local branches will be exploded.
+func (c *Console) BranchesFound(n int) {
+	c.warnf("Extracting from %d local branches - this may take some time and memory!\n", n)
 }
 
-// Infof prints a plain informational line.
-func (c *Console) Infof(format string, args ...any) {
-	fmt.Fprintf(c.w, format+"\n", args...)
+// BranchStarted announces the branch about to be exploded.
+func (c *Console) BranchStarted(index, total int, name string) {
+	fmt.Fprintf(c.w, "Branch [%d/%d]: %s\n", index, total, name)
+}
+
+// BranchListFailed reports that a branch's commits could not be listed.
+func (c *Console) BranchListFailed(branch string, err error) {
+	c.warnf("Failed to list commits on %s: %v", branch, err)
+}
+
+// BranchEmpty reports that the current branch has no commits.
+func (c *Console) BranchEmpty() {
+	fmt.Fprintln(c.w, "  (no commits)")
+}
+
+// BranchCommits reports how many commits the current branch will contribute.
+func (c *Console) BranchCommits(n int) {
+	fmt.Fprintf(c.w, "  Found %d commits\n", n)
+}
+
+// CommitsToExtract reports the commit count for a single-branch run.
+func (c *Console) CommitsToExtract(n int) {
+	fmt.Fprintf(c.w, "Found %d commits to extract\n\n", n)
 }
 
 // Outcome is one snapshot's result, as far as reporting is concerned. The
@@ -103,7 +147,8 @@ func (c *Console) Summary(outputDir string, outcomes []Outcome, verbose bool) {
 	}
 
 	if failed > 0 {
-		fmt.Fprintf(c.w, "%s Completed with errors: %d succeeded, %d failed\n", red("⚠"), succeeded, failed)
+		fmt.Fprintf(c.w, "%s Completed with errors: %d succeeded, %d failed\n",
+			c.tint(color.FgRed, "⚠"), succeeded, failed)
 		if verbose {
 			fmt.Fprintln(c.w, "Failed commits:")
 			for _, o := range outcomes {
@@ -114,5 +159,5 @@ func (c *Console) Summary(outputDir string, outcomes []Outcome, verbose bool) {
 		}
 	}
 
-	fmt.Fprintf(c.w, "\n%s Output: %s\n", green("➜"), outputDir)
+	fmt.Fprintf(c.w, "\n%s Output: %s\n", c.tint(color.FgGreen, "➜"), outputDir)
 }

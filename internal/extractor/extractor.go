@@ -93,9 +93,9 @@ func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, er
 			results[i] = result
 
 			if result.Error != nil {
-				progress.Increment(fmt.Sprintf("✗ %s: %v", commit.ShortHash, result.Error))
+				progress.Failed(commit.ShortHash, result.Error)
 			} else {
-				progress.Increment(fmt.Sprintf("✓ %s → %s", commit.ShortHash, filepath.Base(result.OutputPath)))
+				progress.Done(commit.ShortHash, result.OutputPath)
 			}
 		}()
 	}
