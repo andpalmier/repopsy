@@ -1,0 +1,46 @@
+COMMIT INFORMATION
+===========================
+
+Hash:           8f6a2b1c4d5e6f70819243546576879a0b1c2d3e
+Short Hash:     8f6a2b1
+
+AUTHOR (who wrote the code)
+---------------------------
+Name:           Alice Dev
+Email:          alice@example.com
+Date:           2023-12-05T14:30:22Z
+Timestamp:      1701786622
+
+COMMITTER (who applied the commit)
+----------------------------------
+Name:           Bob Ops
+Email:          bob@example.com
+Date:           2023-12-05T15:00:00Z
+Timestamp:      1701788400
+
+NOTE: Author and Committer are different.
+
+VERIFICATION
+------------
+GPG Signature:  Valid signature (good)
+
+LINEAGE
+-------
+Parents:        7e5d1c2b 
+
+CHANGE STATISTICS
+-----------------
+Files Changed:  5
+Insertions:     +120
+Deletions:      -34
+
+COMMIT MESSAGE
+--------------
+Subject:
+Fix the extraction logic
+
+Full Message:
+Fix the extraction logic
+
+Longer body here.
+

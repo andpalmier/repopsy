@@ -149,24 +149,3 @@ func TestParseCommitLine(t *testing.T) {
 		})
 	}
 }
-
-func TestFormatGPGStatus(t *testing.T) {
-	tests := map[string]string{
-		"G": "Valid signature (good)",
-		"B": "Bad signature",
-		"U": "Valid signature, unknown key",
-		"X": "Valid signature, expired",
-		"Y": "Valid signature, expired key",
-		"R": "Valid signature, revoked key",
-		"E": "Cannot verify (missing key)",
-		"N": "Not signed",
-		"":  "Not signed",
-		"?": "Unknown (?)",
-	}
-
-	for status, want := range tests {
-		if got := formatGPGStatus(status); got != want {
-			t.Errorf("formatGPGStatus(%q) = %q, want %q", status, got, want)
-		}
-	}
-}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/andpalmier/repopsy/internal/extractor"
 	"github.com/andpalmier/repopsy/internal/git"
@@ -86,9 +85,6 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 			return ctx.Err()
 		}
 
-		// Create branch-specific output directory
-		branchDir := filepath.Join(outDir, sanitizeBranchName(branch))
-
 		fmt.Fprintf(os.Stderr, "Branch [%d/%d]: %s\n", i+1, len(branches), branch)
 
 		// List commits for this branch
@@ -111,7 +107,8 @@ func runAllBranches(ctx context.Context, repo *git.Repository, outDir string, cf
 
 		// Create extractor and run
 		ext := extractor.New(repo, extractor.Config{
-			OutputDir: branchDir,
+			OutputDir: outDir,
+			Branch:    branch,
 			Workers:   cfg.Workers,
 			Verbose:   cfg.Verbose,
 		})
@@ -160,11 +157,6 @@ func runSingleBranch(ctx context.Context, repo *git.Repository, outDir string, c
 	printSummary(results, outDir, cfg)
 
 	return err
-}
-
-// sanitizeBranchName converts a branch name to a safe directory name
-func sanitizeBranchName(branch string) string {
-	return strings.ReplaceAll(branch, "/", "_")
 }
 
 // printHeader displays the startup banner with configuration

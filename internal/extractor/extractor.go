@@ -4,22 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 
 	"github.com/andpalmier/repopsy/internal/git"
 	"github.com/andpalmier/repopsy/internal/progress"
+	"github.com/andpalmier/repopsy/internal/snapshot"
 )
-
-// folderTimestampFormat names a snapshot directory: 20231205_143022_abc1234.
-const folderTimestampFormat = "20060102_150405"
 
 // Config configures the extraction process.
 type Config struct {
+	// OutputDir is the root of the exploded repository.
 	OutputDir string
-	Workers   int
-	Verbose   bool
+
+	// Branch names the branch being extracted. When set, snapshots nest under
+	// directories mirroring its ref path; when empty they sit directly under
+	// OutputDir.
+	Branch string
+
+	Workers int
+	Verbose bool
 }
 
 // Result represents the outcome of a single commit
@@ -136,13 +142,10 @@ func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- 
 
 // extractOne extracts a single commit and returns the result
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int) Result {
-	// Format: YYYYMMDD_HHMMSS_hash (e.g., 20231205_143022_abc1234)
-	timestamp := commit.AuthorDate.Format(folderTimestampFormat)
-	folderName := fmt.Sprintf("%s_%s", timestamp, commit.ShortHash)
-	outputPath := filepath.Join(e.config.OutputDir, folderName)
+	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
 
 	// Extract commit contents
-	err := e.repo.ExtractCommit(ctx, commit.Hash, outputPath)
+	err := e.repo.ExtractCommit(ctx, commit.Hash, snapshotPath)
 
 	// Always write metadata if extraction succeeded
 	if err == nil {
@@ -156,7 +159,7 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int
 			commit.Deletions = stats.Deletions
 		}
 
-		if metaErr := commit.WriteMetadataFile(outputPath); metaErr != nil {
+		if metaErr := writeMetadataFile(snapshotPath, commit); metaErr != nil {
 			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
 		}
 	}
@@ -164,7 +167,25 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int
 	return Result{
 		Commit:     commit,
 		Index:      index,
-		OutputPath: outputPath,
+		OutputPath: snapshotPath,
 		Error:      err,
 	}
+}
+
+// writeMetadataFile creates the metadata file inside a snapshot directory. The
+// snapshot module renders the contents; creating and closing the file is the
+// caller's job, which keeps the rendering reachable in tests without a
+// filesystem.
+func writeMetadataFile(snapshotPath string, c git.Commit) (err error) {
+	f, err := os.Create(filepath.Join(snapshotPath, snapshot.MetadataFilename))
+	if err != nil {
+		return fmt.Errorf("failed to create metadata file: %w", err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close metadata file: %w", closeErr)
+		}
+	}()
+
+	return snapshot.WriteMetadata(f, c)
 }
