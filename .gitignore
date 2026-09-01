@@ -28,3 +28,6 @@ Thumbs.db
 CLAUDE.md
 docs/agents/
 .scratch/
+
+# CI builds the release-layout binary here for the Docker image
+/linux/

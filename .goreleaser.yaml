@@ -79,14 +79,6 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     dockerfile: Dockerfile
-    # The Dockerfile compiles from source rather than copying GoReleaser's
-    # prebuilt binary, so the build context needs the sources.
-    extra_files:
-      - go.mod
-      - go.sum
-      - main.go
-      - internal
-      - cmd
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.description: "Forensic tool for analyzing git repository history"

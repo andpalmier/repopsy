@@ -43,8 +43,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+
+      # The Dockerfile copies a prebuilt binary from <os>/<arch>/, which is the
+      # layout GoReleaser produces. Reproducing it here means CI builds the same
+      # image that ships, rather than a second Dockerfile that only CI sees.
+      - name: Build the binary into the release layout
+        run: |
+          mkdir -p linux/amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/repopsy .
+
       - name: Build Docker image
-        run: docker build -t repopsy:test .
+        run: DOCKER_BUILDKIT=1 docker build -t repopsy:test .
 
       - name: Test Docker image
-        run: docker run --rm repopsy:test --help
+        run: docker run --rm repopsy:test --version
