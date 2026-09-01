@@ -273,3 +273,66 @@ func TestFormatGPGStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestFileLineBlobForDeletion covers the only pointer to a deleted file's
+// content. git reports a deletion with an all-zero new blob, so showing the new
+// blob would lose the one hash that can still retrieve what was removed.
+func TestFileLineBlobForDeletion(t *testing.T) {
+	deleted := git.FileChange{
+		Path: "old/gone.go", Status: "D",
+		OldMode: "100644", NewMode: "000000",
+		OldBlob: "ddd4444eee5555ffff", NewBlob: "0000000000000000000",
+		Deletions: 99,
+	}
+
+	line := fileLine(deleted)
+	if !strings.Contains(line, "ddd4444eee55") {
+		t.Errorf("a deletion must carry the removed content's blob: %q", line)
+	}
+	if strings.Contains(line, "000000000000") {
+		t.Errorf("the all-zero new blob leaked into the record: %q", line)
+	}
+
+	// A normal modification still shows the new content.
+	modified := git.FileChange{
+		Path: "go.mod", Status: "M",
+		OldBlob: "aaaaaaaaaaaa", NewBlob: "bbbbbbbbbbbb",
+	}
+	if line := fileLine(modified); !strings.Contains(line, "bbbbbbbbbbbb") {
+		t.Errorf("a modification must show the new content's blob: %q", line)
+	}
+
+	// An addition has no old blob, so the new one is all there is.
+	added := git.FileChange{Path: "new.go", Status: "A", OldBlob: "0000000", NewBlob: "cccccccccccc"}
+	if line := fileLine(added); !strings.Contains(line, "cccccccccccc") {
+		t.Errorf("an addition must show the new content's blob: %q", line)
+	}
+}
+
+func TestWriteChecksums(t *testing.T) {
+	var buf strings.Builder
+	err := WriteChecksums(&buf, []git.FileDigest{
+		{Path: "a.go", SHA256: strings.Repeat("a", 64)},
+		{Path: "dir/b with space.txt", SHA256: strings.Repeat("b", 64)},
+	})
+	if err != nil {
+		t.Fatalf("WriteChecksums: %v", err)
+	}
+
+	// Two spaces between hash and path is what sha256sum -c expects.
+	want := strings.Repeat("a", 64) + "  a.go\n" +
+		strings.Repeat("b", 64) + "  dir/b with space.txt\n"
+	if buf.String() != want {
+		t.Errorf("got  %q\nwant %q", buf.String(), want)
+	}
+}
+
+func TestWriteChecksumsEmpty(t *testing.T) {
+	var buf strings.Builder
+	if err := WriteChecksums(&buf, nil); err != nil {
+		t.Fatalf("WriteChecksums: %v", err)
+	}
+	if buf.String() != "" {
+		t.Errorf("expected no output for no files, got %q", buf.String())
+	}
+}
