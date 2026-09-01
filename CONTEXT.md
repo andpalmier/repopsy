@@ -44,7 +44,7 @@ _Avoid_: thread, job, parallelism
 ### Metadata
 
 **Change statistics**:
-The counts of files changed, insertions, and deletions in a commit's own diff against its
-first parent. A merge commit introduces no such diff, so its statistics are zero by
-construction rather than by omission.
+The counts of files changed, insertions, and deletions in a commit's diff against its first
+parent. A merge commit is measured the same way, against its first parent only, so changes
+brought in from the other side of the merge are not counted twice.
 _Avoid_: diffstat, numstat, commit size

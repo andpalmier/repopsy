@@ -144,21 +144,11 @@ func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- 
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int) Result {
 	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
 
-	// Extract commit contents
+	// Extract commit contents. The commit already carries its message body and
+	// change statistics from ListCommits, so no further git calls are needed.
 	err := e.repo.ExtractCommit(ctx, commit.Hash, snapshotPath)
 
-	// Always write metadata if extraction succeeded
 	if err == nil {
-		if fullMsg, msgErr := e.repo.GetCommitFullMessage(ctx, commit.Hash); msgErr == nil {
-			commit.FullMessage = fullMsg
-		}
-
-		if stats, statsErr := e.repo.GetCommitStats(ctx, commit.Hash); statsErr == nil {
-			commit.FilesChanged = stats.FilesChanged
-			commit.Insertions = stats.Insertions
-			commit.Deletions = stats.Deletions
-		}
-
 		if metaErr := writeMetadataFile(snapshotPath, commit); metaErr != nil {
 			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
 		}
