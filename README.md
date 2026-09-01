@@ -133,6 +133,31 @@ Extract with 8 workers:
 repopsy -w 8 /path/to/repo
 ```
 
+## Acquiring a Repository
+
+How the repository is obtained determines how much of it exists to explode.
+
+```bash
+git clone --mirror git@example.com:acme/demo.git demo.git
+repopsy demo.git
+```
+
+`--mirror` (and `--bare`) map every branch into `refs/heads/`, so repopsy sees
+all of them. A plain `git clone` checks out one branch and leaves the rest under
+`refs/remotes/`, where repopsy does not look — so a plain clone yields a single
+branch's snapshots.
+
+Two things do not survive any clone, and need the original repository:
+
+- **Reflogs**, and therefore `--include-rewritten`. A clone starts its own
+  reflog, so rewritten history and abandoned detached-head work are recoverable
+  only from the repository where they happened.
+- **Repository state**: local configuration and installed hooks are not
+  transferred, so `REPOSITORY.txt` describes the clone rather than the original.
+
+For a forensic examination where those matter, work from a copy of the
+repository directory itself rather than from a clone.
+
 ## Output Structure
 
 When extracting all branches, each branch name becomes a directory path. A
@@ -196,14 +221,18 @@ and whatever the examined repository is configured to do.
 
 - **Branch names and Windows paths.** Some ref names are legal in git but cannot
   be directory names on Windows: reserved device names (`aux`, `CON`, `NUL`,
-  `COM1`…) and the characters `<`, `>`, `"`, `|`. Extracting all branches from a
-  repository containing such a branch will fail on Windows. Linux and macOS are
-  unaffected.
-- **"All branches" means local branches.** Only `refs/heads/` is listed;
-  remote-tracking refs are not extracted. Tags are recorded in `TAGS.txt` but
-  their targets are only extracted if a branch reaches them. On a fresh clone
-  this is usually a single branch — fetch or check out the branches you want
-  first, or pass `-b`.
+  `COM1`…) and the characters `<`, `>`, `"`, `|`. On Windows, such a branch's
+  snapshots fail while the rest of the run completes, and every failure is listed
+  in `EXTRACTION.txt` with its reason. The directory name is deliberately not
+  sanitised: a snapshot directory that does not match the ref it came from would
+  misattribute evidence, so an undeliverable branch is reported rather than
+  quietly renamed. Linux and macOS are unaffected.
+- **"All branches" means `refs/heads/`.** Remote-tracking refs under
+  `refs/remotes/` are not extracted, so a *plain* `git clone` yields a single
+  branch. Acquire with `git clone --mirror` instead (see Acquiring a Repository
+  above), which maps every branch into `refs/heads/` — there is then nothing to
+  miss. Tags are recorded in `TAGS.txt`, but their targets are only extracted if
+  a branch reaches them.
 - **Reflog recovery needs the original repository.** Reflogs are local and are
   not transferred by clone, so `--include-rewritten` finds nothing in a bare
   mirror or a fresh clone. Reflog entries also expire (`gc.reflogExpire`,

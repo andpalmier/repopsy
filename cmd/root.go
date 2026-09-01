@@ -31,6 +31,11 @@ each commit's state into a separate folder for comparison and analysis.
 Any path inside a repository names the repository itself. Requires git 2.31 or
 newer, and nothing else at runtime.
 
+Acquire with "git clone --mirror" so every branch lands in refs/heads and none
+are missed; a plain clone leaves them under refs/remotes, where repopsy does not
+look. Reflogs and repository state do not survive any clone, so --include-rewritten
+and REPOSITORY.txt need the original repository.
+
 Usage:
   repopsy [flags] <repository-path>
 
