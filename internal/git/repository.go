@@ -3,6 +3,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,32 +17,19 @@ type Repository struct {
 	Path string
 }
 
-// Open opens and validates a git repository at the given path
-// It returns an error if the path is not a valid git repository
+// Open opens and validates the git repository containing path.
+//
+// The repository is identified by its top level, so naming any directory inside
+// a work tree names the repository itself rather than the subtree. Bare
+// repositories have no work tree and are their own root. See docs/adr/0002.
 func Open(path string) (*Repository, error) {
-	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve path: %w", err)
 	}
 
-	// Resolve symlinks to prevent path traversal attacks
-	realPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve symlinks: %w", err)
-	}
-
-	// Check if the resolved path differs from the original (potential symlink attack)
-	if realPath != absPath {
-		// Verify the real path is still within expected bounds
-		realAbsPath, absErr := filepath.Abs(realPath)
-		if absErr != nil {
-			return nil, fmt.Errorf("failed to resolve real path: %w", absErr)
-		}
-		absPath = realAbsPath
-	}
-
-	// Check if directory exists
+	// Stat before asking git, so a missing or non-directory path reports what is
+	// actually wrong instead of "not a git repository".
 	info, err := os.Stat(absPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to access path: %w", err)
@@ -50,33 +38,40 @@ func Open(path string) (*Repository, error) {
 		return nil, fmt.Errorf("path is not a directory: %s", absPath)
 	}
 
-	// Verify we have read permissions on the directory
-	if _, err := os.ReadDir(absPath); err != nil {
-		return nil, fmt.Errorf("failed to read directory: %w", err)
+	root, err := resolveRoot(absPath)
+	if err != nil {
+		return nil, err
 	}
-
-	// Verify it's a git repository by checking for .git
-	gitDir := filepath.Join(absPath, ".git")
-	if _, err := os.Stat(gitDir); err != nil {
-		// Could be a bare repository or worktree, try git rev-parse
-		cmd := exec.Command("git", "rev-parse", "--git-dir")
-		cmd.Dir = absPath
-		if _, err := cmd.Output(); err != nil {
-			return nil, fmt.Errorf("not a git repository: %s", absPath)
-		}
-	}
-
-	return &Repository{Path: absPath}, nil
+	return &Repository{Path: root}, nil
 }
 
-// runGitCommand executes a git command and returns trimmed output.
-func (r *Repository) runGitCommand(ctx context.Context, args ...string) (string, error) {
+// resolveRoot finds the root repopsy should treat dir as naming. git resolves
+// symlinks along the way, so the result is canonical.
+func resolveRoot(dir string) (string, error) {
+	if top, err := gitOutput(context.Background(), dir, "rev-parse", "--show-toplevel"); err == nil && top != "" {
+		return top, nil
+	}
+
+	// --show-toplevel fails inside a bare repository ("must be run in a work
+	// tree"), so fall back to asking whether that is why.
+	if bare, err := gitOutput(context.Background(), dir, "rev-parse", "--is-bare-repository"); err == nil && bare == "true" {
+		return dir, nil
+	}
+
+	return "", fmt.Errorf("not a git repository: %s", dir)
+}
+
+// gitOutput runs git in dir and returns its trimmed standard output. git's own
+// stderr is surfaced in the error, which is the most useful thing it produces.
+func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = r.Path
+	cmd.Dir = dir
+
 	output, err := cmd.Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("git %s failed: %w", args[0], exitErr)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return "", fmt.Errorf("git %s failed: %s", args[0], strings.TrimSpace(string(exitErr.Stderr)))
 		}
 		return "", fmt.Errorf("git %s failed: %w", args[0], err)
 	}
@@ -85,23 +80,14 @@ func (r *Repository) runGitCommand(ctx context.Context, args ...string) (string,
 
 // ListBranches returns all local branch names in the repository.
 func (r *Repository) ListBranches(ctx context.Context) ([]string, error) {
-	output, err := r.runGitCommand(ctx, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	output, err := gitOutput(ctx, r.Path, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
 	}
-
-	// Handle empty output - return empty slice instead of slice with empty string
-	if strings.TrimSpace(output) == "" {
-		return []string{}, nil
+	if output == "" {
+		return nil, nil
 	}
-
-	// Split and filter out empty strings (from trailing newlines)
-	lines := strings.Split(output, "\n")
-	branches := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if line != "" {
-			branches = append(branches, line)
-		}
-	}
-	return branches, nil
+	// Ref names cannot contain whitespace, and the output is already trimmed,
+	// so every remaining line is a branch name.
+	return strings.Split(output, "\n"), nil
 }
