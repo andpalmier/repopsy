@@ -10,12 +10,7 @@ import (
 
 // setupTestRepo creates a temporary git repository with some commits
 func setupTestRepo(t *testing.T) *Repository {
-	dir, err := os.MkdirTemp("", "repopsy-test-")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	// Cleanup
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := t.TempDir()
 
 	run := func(args ...string) {
 		cmd := exec.Command("git", args...)
@@ -28,6 +23,10 @@ func setupTestRepo(t *testing.T) *Repository {
 	run("init")
 	run("config", "user.name", "Test User")
 	run("config", "user.email", "test@example.com")
+	// Signing must be off regardless of the machine's global git config,
+	// otherwise commit creation fails wherever commit.gpgsign is set.
+	run("config", "commit.gpgsign", "false")
+	run("config", "tag.gpgsign", "false")
 
 	// Commit 1
 	if err := os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("content1"), 0644); err != nil {

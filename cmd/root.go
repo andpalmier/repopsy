@@ -17,6 +17,10 @@ import (
 const (
 	appName = "repopsy"
 
+	// maxWorkers is the safety cap on parallel workers per branch. Each worker
+	// runs a git archive and a tar process, so this bounds the process count.
+	maxWorkers = 32
+
 	usage = `repopsy - Explode git repositories by extracting each commit into a separate folder
 
 A forensic tool for analyzing git repository history (Repository Autopsy) by extracting
@@ -56,6 +60,13 @@ func alias[T any](reg func(*T, string, T, string), p *T, short, long string, def
 	reg(p, long, def, help)
 }
 
+// defaultWorkers is the worker count used when none is given, or when the given
+// one is unusable. Never above maxWorkers, so the cap warning can only be
+// triggered by an explicit request.
+func defaultWorkers() int {
+	return min(runtime.NumCPU(), maxWorkers)
+}
+
 // newFlagSet builds the flag set writing into o. Both parseArgs and printUsage
 // use it, so flag names and help strings have a single source of truth.
 // Output is discarded and Usage suppressed: callers report errors themselves.
@@ -65,7 +76,7 @@ func newFlagSet(o *options) *flag.FlagSet {
 	fs.Usage = func() {}
 
 	alias(fs.StringVar, &o.cfg.OutputDir, "o", "output", "", "Output directory (default: ./<repo-name>-exploded)")
-	alias(fs.IntVar, &o.cfg.Workers, "w", "workers", runtime.NumCPU(), "Number of parallel workers per branch")
+	alias(fs.IntVar, &o.cfg.Workers, "w", "workers", defaultWorkers(), fmt.Sprintf("Number of parallel workers per branch (max %d)", maxWorkers))
 	alias(fs.IntVar, &o.cfg.Limit, "n", "limit", 0, "Maximum number of commits to extract (0 = all)")
 	alias(fs.StringVar, &o.cfg.Branch, "b", "branch", "", "Branch to extract from (default: all branches)")
 	alias(fs.BoolVar, &o.cfg.Verbose, "v", "verbose", false, "Show detailed output per commit")
@@ -75,8 +86,9 @@ func newFlagSet(o *options) *flag.FlagSet {
 	return fs
 }
 
-// parseArgs turns an argument list into resolved options.
-func parseArgs(args []string) (options, error) {
+// parseArgs turns an argument list into resolved options. Warnings about
+// adjusted values are written to warn; nothing else is printed.
+func parseArgs(args []string, warn io.Writer) (options, error) {
 	var o options
 	fs := newFlagSet(&o)
 
@@ -95,12 +107,23 @@ func parseArgs(args []string) (options, error) {
 	}
 	o.cfg.RepoPath = rest[0]
 
+	// Resolve the worker count here rather than downstream, so the value the
+	// header reports is the value that is actually used.
+	switch {
+	case o.cfg.Workers > maxWorkers:
+		fmt.Fprintf(warn, "⚠ Workers capped at %d (requested %d)\n", maxWorkers, o.cfg.Workers)
+		o.cfg.Workers = maxWorkers
+	case o.cfg.Workers < 1:
+		fmt.Fprintf(warn, "⚠ Workers must be at least 1, using %d\n", defaultWorkers())
+		o.cfg.Workers = defaultWorkers()
+	}
+
 	return o, nil
 }
 
 // Execute runs the CLI application and returns an exit code.
 func Execute(version, commit, date string) int {
-	opts, err := parseArgs(os.Args[1:])
+	opts, err := parseArgs(os.Args[1:], os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		printUsage(os.Stderr)

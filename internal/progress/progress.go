@@ -5,12 +5,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/schollz/progressbar/v3"
 )
 
 // Reporter handles progress reporting to the terminal.
+//
+// Increment is called concurrently by every extraction worker. progressbar
+// guards Add internally but not Clear, and the verbose path pairs a Clear with
+// a separate write that must not interleave, so all terminal access here is
+// serialised by mu.
 type Reporter struct {
+	mu      sync.Mutex
 	bar     *progressbar.ProgressBar
 	verbose bool
 	writer  io.Writer
@@ -58,8 +65,11 @@ func New(cfg Config) *Reporter {
 // Start begins progress tracking.
 func (r *Reporter) Start() {}
 
-// Increment advances the progress by one item.
+// Increment advances the progress by one item. Safe for concurrent use.
 func (r *Reporter) Increment(message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.verbose && message != "" {
 		_ = r.bar.Clear()
 		_, _ = fmt.Fprintf(r.writer, "%s\n", message)
@@ -69,11 +79,15 @@ func (r *Reporter) Increment(message string) {
 
 // Finish completes progress tracking.
 func (r *Reporter) Finish() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_ = r.bar.Finish()
 }
 
 // Error reports an error during processing.
 func (r *Reporter) Error(message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_ = r.bar.Clear()
 	_, _ = fmt.Fprintf(r.writer, "✗ Error: %s\n", message)
 }
