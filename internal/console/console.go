@@ -112,6 +112,12 @@ func (c *Console) RewrittenFound(n int) {
 	fmt.Fprintf(c.w, "  Recovered %d unreachable commits from the reflog\n", n)
 }
 
+// DetachedHeadFound reports work abandoned on a detached head, which belongs to
+// no branch and so no branch reflog recovers.
+func (c *Console) DetachedHeadFound(n int) {
+	fmt.Fprintf(c.w, "HEAD (detached): recovered %d commits belonging to no branch\n", n)
+}
+
 // BranchListFailed reports that a branch's commits could not be listed.
 func (c *Console) BranchListFailed(branch string, err error) {
 	c.warnf("Failed to list commits on %s: %v", branch, err)

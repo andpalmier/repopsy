@@ -16,8 +16,14 @@ import (
 	"github.com/andpalmier/repopsy/internal/snapshot"
 )
 
-// outputSuffix is appended to the repository name to name the output directory.
-const outputSuffix = "-exploded"
+const (
+	// outputSuffix is appended to the repository name to name the output directory.
+	outputSuffix = "-exploded"
+
+	// detachedHeadDir holds commits that belong to no branch. git refuses "HEAD"
+	// as a branch name, so this cannot collide with a branch's directory.
+	detachedHeadDir = "HEAD"
+)
 
 // Config holds the application configuration
 type Config struct {
@@ -44,11 +50,10 @@ type Config struct {
 // accumulator: the console summary and the extraction manifest are both
 // projections of it.
 type branchRun struct {
-	label     string // the branch as reported to the user
-	commits   int
-	rewritten int    // snapshots recovered from the reflog
-	skipped   string // why the branch produced nothing, if it did not
-	results   []extractor.Result
+	label   string // the ref as reported to the user
+	commits int    // reachable commits found, before any recovery
+	skipped string // why the ref produced nothing, if it did not
+	results []extractor.Result
 }
 
 // Run executes the repopsy application logic
@@ -74,12 +79,27 @@ func Run(ctx context.Context, cfg Config) error {
 		Limit:     cfg.Limit,
 	})
 
+	// scheduled holds every commit hash already extracted, so a commit several
+	// reflogs remember is recovered once.
+	scheduled := map[string]bool{}
+
 	var runs []branchRun
 	var runErr error
 	if cfg.Branch != "" {
-		runs, runErr = runSingleBranch(ctx, out, repo, outDir, cfg)
+		runs, runErr = runSingleBranch(ctx, out, repo, outDir, cfg, scheduled)
 	} else {
-		runs, runErr = runAllBranches(ctx, out, repo, outDir, cfg)
+		runs, runErr = runAllBranches(ctx, out, repo, outDir, cfg, scheduled)
+
+		// Work abandoned on a detached head belongs to no branch, so no branch
+		// reflog recovers it. Only in all-branches mode: naming one branch means
+		// that branch's history.
+		if headRun, err := runDetachedHead(ctx, out, repo, outDir, cfg, scheduled); err != nil {
+			if runErr == nil {
+				runErr = err
+			}
+		} else if headRun != nil {
+			runs = append(runs, *headRun)
+		}
 	}
 
 	// Written even for a partial run: a folder of snapshots that cannot say
@@ -110,7 +130,7 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 }
 
 // runAllBranches explodes every local branch into its own directory tree.
-func runAllBranches(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) ([]branchRun, error) {
+func runAllBranches(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) ([]branchRun, error) {
 	branches, err := repo.ListBranches(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %w", err)
@@ -153,16 +173,16 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 		out.BranchCommits(len(commits))
 		run.commits = len(commits)
 
-		results, err := extract(ctx, repo, outDir, branch, cfg, commits)
-		run.results = results
+		// Recovery happens before extraction so both sets travel through one
+		// pass, and therefore one progress bar.
+		all, err := withRewritten(ctx, out, repo, branch, cfg, commits, scheduled)
 		if err != nil && extractionErr == nil {
 			extractionErr = err
 		}
 
-		if rewritten, err := recoverRewritten(ctx, out, repo, outDir, branch, cfg, commits); err == nil {
-			run.rewritten = len(rewritten)
-			run.results = append(run.results, rewritten...)
-		} else if extractionErr == nil {
+		results, err := extract(ctx, repo, outDir, branch, cfg, all)
+		run.results = results
+		if err != nil && extractionErr == nil {
 			extractionErr = err
 		}
 
@@ -173,7 +193,7 @@ func runAllBranches(ctx context.Context, out *console.Console, repo *git.Reposit
 }
 
 // runSingleBranch explodes one branch directly into the output directory.
-func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config) ([]branchRun, error) {
+func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) ([]branchRun, error) {
 	commits, err := repo.ListCommits(ctx, git.ListOptions{
 		Branch:  cfg.Branch,
 		Limit:   cfg.Limit,
@@ -188,42 +208,70 @@ func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Reposi
 
 	out.CommitsToExtract(len(commits))
 
-	// An explicit branch means a flat layout, so no branch is passed through.
-	results, err := extract(ctx, repo, outDir, "", cfg, commits)
-
-	run := branchRun{label: cfg.Branch, commits: len(commits), results: results}
-	if rewritten, rErr := recoverRewritten(ctx, out, repo, outDir, cfg.Branch, cfg, commits); rErr == nil {
-		run.rewritten = len(rewritten)
-		run.results = append(run.results, rewritten...)
-	} else if err == nil {
-		err = rErr
+	all, err := withRewritten(ctx, out, repo, cfg.Branch, cfg, commits, scheduled)
+	if err != nil {
+		return nil, err
 	}
 
-	return []branchRun{run}, err
+	// An explicit branch means a flat layout, so no branch is passed through.
+	results, err := extract(ctx, repo, outDir, "", cfg, all)
+
+	return []branchRun{{label: cfg.Branch, commits: len(commits), results: results}}, err
 }
 
-// recoverRewritten extracts commits the branch's ref once pointed at but no
-// longer reaches. Off unless asked for: the recovered set changes the snapshot
-// count, and on most repositories it is empty.
-func recoverRewritten(ctx context.Context, out *console.Console, repo *git.Repository, outDir, branch string, cfg Config, reachable []git.Commit) ([]extractor.Result, error) {
+// withRewritten returns the reachable commits followed by any the ref no longer
+// reaches, and marks all of them scheduled. Recovery is off unless asked for:
+// the recovered set changes the snapshot count, and on most repositories it is
+// empty.
+func withRewritten(ctx context.Context, out *console.Console, repo *git.Repository, ref string, cfg Config, reachable []git.Commit, scheduled map[string]bool) ([]git.Commit, error) {
+	all := make([]git.Commit, 0, len(reachable))
+	all = append(all, reachable...)
+	for _, c := range reachable {
+		scheduled[c.Hash] = true
+	}
+
+	if !cfg.IncludeRewritten || ctx.Err() != nil {
+		return all, nil
+	}
+
+	rewritten, err := repo.RewrittenCommits(ctx, ref, scheduled, cfg.Limit)
+	if err != nil {
+		return all, err
+	}
+	if len(rewritten) == 0 {
+		return all, nil
+	}
+
+	out.RewrittenFound(len(rewritten))
+	for _, c := range rewritten {
+		scheduled[c.Hash] = true
+	}
+	return append(all, rewritten...), nil
+}
+
+// runDetachedHead extracts commits HEAD's reflog remembers that no branch
+// reaches and no branch reflog recovered — work abandoned on a detached head.
+//
+// They belong to no branch, so they go in a top-level HEAD directory. git
+// refuses "HEAD" as a branch name, so that cannot collide with a branch's own
+// directory.
+func runDetachedHead(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) (*branchRun, error) {
 	if !cfg.IncludeRewritten || ctx.Err() != nil {
 		return nil, nil
 	}
 
-	rewritten, err := repo.RewrittenCommits(ctx, branch, reachable, cfg.Limit)
-	if err != nil || len(rewritten) == 0 {
+	abandoned, err := repo.RewrittenCommits(ctx, detachedHeadDir, scheduled, cfg.Limit)
+	if err != nil || len(abandoned) == 0 {
 		return nil, err
 	}
 
-	out.RewrittenFound(len(rewritten))
-
-	// Recovered commits belong to the branch whose reflog held them, so they go
-	// in the same directory as its reachable history.
-	nest := branch
-	if cfg.Branch != "" {
-		nest = "" // an explicit branch means a flat layout
+	out.DetachedHeadFound(len(abandoned))
+	for _, c := range abandoned {
+		scheduled[c.Hash] = true
 	}
-	return extract(ctx, repo, outDir, nest, cfg, rewritten)
+
+	results, err := extract(ctx, repo, outDir, detachedHeadDir, cfg, abandoned)
+	return &branchRun{label: detachedHeadDir + " (detached)", results: results}, err
 }
 
 // extract runs the extractor over one branch's commits.
@@ -301,12 +349,14 @@ func buildManifest(cfg Config, repo *git.Repository, startedAt time.Time, runs [
 
 	for _, run := range runs {
 		summary := snapshot.BranchSummary{
-			Name:      run.label,
-			Commits:   run.commits,
-			Rewritten: run.rewritten,
-			Skipped:   run.skipped,
+			Name:    run.label,
+			Commits: run.commits,
+			Skipped: run.skipped,
 		}
 		for _, r := range run.results {
+			if r.Commit.Unreachable {
+				summary.Rewritten++
+			}
 			if r.Error != nil {
 				m.Failures = append(m.Failures, snapshot.Failure{
 					Branch:    run.label,

@@ -156,7 +156,11 @@ func TestRewrittenCommitsRecoversWhatAResetRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rewritten, err := repo.RewrittenCommits(context.Background(), branch, reachable, 0)
+	exclude := map[string]bool{}
+	for _, c := range reachable {
+		exclude[c.Hash] = true
+	}
+	rewritten, err := repo.RewrittenCommits(context.Background(), branch, exclude, 0)
 	if err != nil {
 		t.Fatalf("RewrittenCommits: %v", err)
 	}
@@ -194,11 +198,102 @@ func TestRewrittenCommitsEmptyWithoutAReflog(t *testing.T) {
 	}
 
 	// Reflogs are local, so a bare clone has nothing to recover from.
-	rewritten, err := repo.RewrittenCommits(context.Background(), "main", nil, 0)
+	rewritten, err := repo.RewrittenCommits(context.Background(), "main", map[string]bool{}, 0)
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
 	if len(rewritten) != 0 {
 		t.Errorf("got %d rewritten commits from a bare clone, want none", len(rewritten))
+	}
+}
+
+// TestRewrittenCommitsFromHeadFindsDetachedWork covers the gap between the two
+// records: HEAD's reflog remembers work abandoned on a detached head, which no
+// branch reaches and no branch reflog recovers.
+func TestRewrittenCommitsFromHeadFindsDetachedWork(t *testing.T) {
+	b := newRepo(t)
+	b.write("f.txt", "v1\n", 0o644)
+	b.commit("one")
+
+	// Captured before detaching: "git branch" adds a pseudo-entry once detached.
+	branch := b.git("rev-parse", "--abbrev-ref", "HEAD")
+
+	b.git("checkout", "--detach")
+	b.write("g.txt", "detached\n", 0o644)
+	abandoned := b.commit("DETACHED work")
+	b.git("checkout", branch)
+
+	repo := b.open()
+
+	reachable, err := repo.ListCommits(context.Background(), ListOptions{Branch: branch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclude := map[string]bool{}
+	for _, c := range reachable {
+		exclude[c.Hash] = true
+	}
+
+	// The branch's own reflog never held it.
+	fromBranch, err := repo.RewrittenCommits(context.Background(), branch, exclude, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fromBranch {
+		if c.Hash == abandoned {
+			t.Fatal("the branch reflog should not know about detached work")
+		}
+	}
+
+	// HEAD's reflog does.
+	fromHead, err := repo.RewrittenCommits(context.Background(), "HEAD", exclude, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, c := range fromHead {
+		if c.Hash == abandoned {
+			found = true
+			if !c.Unreachable {
+				t.Error("recovered detached work must be marked unreachable")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("HEAD reflog did not recover the abandoned commit %s", abandoned[:7])
+	}
+}
+
+// TestRewrittenCommitsRespectsExclusion stops a commit several reflogs remember
+// from being recovered more than once.
+func TestRewrittenCommitsRespectsExclusion(t *testing.T) {
+	b := newRepo(t)
+	b.write("f.txt", "v1\n", 0o644)
+	b.commit("one")
+	b.write("f.txt", "v2\n", 0o644)
+	lost := b.commit("lost")
+	b.git("reset", "--hard", "HEAD~1")
+
+	repo := b.open()
+	all, err := repo.RewrittenCommits(context.Background(), "HEAD", map[string]bool{}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) == 0 {
+		t.Fatal("expected something to recover")
+	}
+
+	// Excluding it removes it from the result.
+	excluded, err := repo.RewrittenCommits(context.Background(), "HEAD", map[string]bool{lost: true}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range excluded {
+		if c.Hash == lost {
+			t.Error("an excluded commit was recovered anyway")
+		}
+	}
+	if len(excluded) >= len(all) {
+		t.Errorf("exclusion had no effect: %d vs %d", len(excluded), len(all))
 	}
 }

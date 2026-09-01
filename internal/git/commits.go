@@ -307,34 +307,33 @@ func parseNumstatLine(line string) (FileChange, bool) {
 	return f, true
 }
 
-// RewrittenCommits returns commits a branch's ref once pointed at but no longer
-// reaches — what a reset or force-push replaced.
+// RewrittenCommits returns commits ref once pointed at that are not already
+// accounted for — what a reset or force-push replaced.
+//
+// exclude holds hashes already scheduled for extraction, so the same commit is
+// not recovered twice when several refs' reflogs held it. ref is any ref with a
+// reflog, including HEAD, whose log holds work abandoned on a detached head.
 //
 // Reflogs are local and are not transferred by clone, so this is empty for a
 // bare repository or a fresh clone however much history was rewritten upstream.
-func (r *Repository) RewrittenCommits(ctx context.Context, branch string, reachable []Commit, limit int) ([]Commit, error) {
-	tips, err := r.ReflogTips(ctx, branch)
+func (r *Repository) RewrittenCommits(ctx context.Context, ref string, exclude map[string]bool, limit int) ([]Commit, error) {
+	tips, err := r.ReflogTips(ctx, ref)
 	if err != nil || len(tips) == 0 {
 		return nil, err
 	}
 
 	// Deliberately unlimited: the newest commits a reflog names are usually the
 	// reachable ones, so limiting the walk first would filter away almost
-	// everything and make --include-rewritten silently useless alongside -n.
-	// The limit is applied to the recovered set instead.
+	// everything and make recovery silently useless alongside -n. The limit is
+	// applied to the recovered set instead.
 	fromReflog, err := r.ListCommits(ctx, ListOptions{Tips: tips, Reverse: true})
 	if err != nil {
 		return nil, err
 	}
 
-	current := make(map[string]bool, len(reachable))
-	for _, c := range reachable {
-		current[c.Hash] = true
-	}
-
 	var rewritten []Commit
 	for _, c := range fromReflog {
-		if current[c.Hash] {
+		if exclude[c.Hash] {
 			continue
 		}
 		c.Unreachable = true
