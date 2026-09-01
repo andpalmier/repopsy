@@ -1,4 +1,4 @@
-// repopsy expands a git repository by extracting each commit into
+// repopsy explodes a git repository by extracting each commit into
 // a separate folder for easy comparison and analysis
 package main
 

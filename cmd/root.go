@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"runtime"
@@ -12,27 +14,10 @@ import (
 	"github.com/andpalmier/repopsy/internal/app"
 )
 
-// CLI flags
-var (
-	outputDir   string
-	workers     int
-	limit       int
-	branch      string
-	verbose     bool
-	showVersion bool
-	showHelp    bool
-)
-
-// Version information (set by main)
-var (
-	appVersion string
-	appCommit  string
-	appDate    string
-)
-
 const (
 	appName = "repopsy"
-	usage   = `repopsy - Expand git repositories by extracting each commit into a separate folder
+
+	usage = `repopsy - Explode git repositories by extracting each commit into a separate folder
 
 A forensic tool for analyzing git repository history (Repository Autopsy) by extracting
 each commit's state into a separate folder for comparison and analysis.
@@ -41,95 +26,100 @@ Usage:
   repopsy [flags] <repository-path>
 
 Examples:
-  # Extract all commits from all branches
+  # Explode all commits from all branches
   repopsy .
 
-  # Extract last 5 commits from all branches
+  # Explode the last 5 commits from all branches
   repopsy -n 5 /path/to/repo
 
-  # Extract from a specific branch only
+  # Explode a specific branch only
   repopsy -b main /path/to/repo
 
-  # Extract with verbose output
+  # Explode with verbose output
   repopsy -v .
 
 Flags:
 `
 )
 
-// init sets up the CLI flags with their defaults and descriptions
-func init() {
-	flag.StringVar(&outputDir, "o", "", "Output directory (default: ./<repo-name>-exploded)")
-	flag.StringVar(&outputDir, "output", "", "Output directory (default: ./<repo-name>-exploded)")
-
-	flag.IntVar(&workers, "w", runtime.NumCPU(), "Number of parallel workers")
-	flag.IntVar(&workers, "workers", runtime.NumCPU(), "Number of parallel workers")
-
-	flag.IntVar(&limit, "n", 0, "Maximum number of commits to extract (0 = all)")
-	flag.IntVar(&limit, "limit", 0, "Maximum number of commits to extract (0 = all)")
-
-	flag.StringVar(&branch, "b", "", "Branch to extract from (default: all branches)")
-	flag.StringVar(&branch, "branch", "", "Branch to extract from (default: all branches)")
-
-	flag.BoolVar(&verbose, "v", false, "Show detailed output per commit")
-	flag.BoolVar(&verbose, "verbose", false, "Show detailed output per commit")
-
-	flag.BoolVar(&showVersion, "version", false, "Show version information")
-	flag.BoolVar(&showHelp, "h", false, "Show help message")
-	flag.BoolVar(&showHelp, "help", false, "Show help message")
-
-	// Customize usage output
-	flag.Usage = func() {
-		fmt.Fprint(os.Stderr, usage)
-		flag.PrintDefaults()
-	}
+// options is the fully-resolved result of parsing a command line.
+type options struct {
+	cfg         app.Config
+	showVersion bool
+	showHelp    bool
 }
 
-// Execute runs the CLI application and returns an exit code
+// alias registers the same target under both a short and a long flag name, so
+// the help text for a flag lives in exactly one place.
+func alias[T any](reg func(*T, string, T, string), p *T, short, long string, def T, help string) {
+	reg(p, short, def, help)
+	reg(p, long, def, help)
+}
+
+// newFlagSet builds the flag set writing into o. Both parseArgs and printUsage
+// use it, so flag names and help strings have a single source of truth.
+// Output is discarded and Usage suppressed: callers report errors themselves.
+func newFlagSet(o *options) *flag.FlagSet {
+	fs := flag.NewFlagSet(appName, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+
+	alias(fs.StringVar, &o.cfg.OutputDir, "o", "output", "", "Output directory (default: ./<repo-name>-exploded)")
+	alias(fs.IntVar, &o.cfg.Workers, "w", "workers", runtime.NumCPU(), "Number of parallel workers per branch")
+	alias(fs.IntVar, &o.cfg.Limit, "n", "limit", 0, "Maximum number of commits to extract (0 = all)")
+	alias(fs.StringVar, &o.cfg.Branch, "b", "branch", "", "Branch to extract from (default: all branches)")
+	alias(fs.BoolVar, &o.cfg.Verbose, "v", "verbose", false, "Show detailed output per commit")
+	alias(fs.BoolVar, &o.showHelp, "h", "help", false, "Show help message")
+	fs.BoolVar(&o.showVersion, "version", false, "Show version information")
+
+	return fs
+}
+
+// parseArgs turns an argument list into resolved options.
+func parseArgs(args []string) (options, error) {
+	var o options
+	fs := newFlagSet(&o)
+
+	if err := fs.Parse(args); err != nil {
+		return options{}, err
+	}
+
+	// Help and version short-circuit before the repository path is required.
+	if o.showHelp || o.showVersion {
+		return o, nil
+	}
+
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return options{}, errors.New("repository path is required")
+	}
+	o.cfg.RepoPath = rest[0]
+
+	return o, nil
+}
+
+// Execute runs the CLI application and returns an exit code.
 func Execute(version, commit, date string) int {
-	appVersion = version
-	appCommit = commit
-	appDate = date
-
-	// Parse flags
-	flag.Parse()
-
-	// Handle help and version flags
-	if showHelp {
-		flag.Usage()
-		return 0
-	}
-
-	if showVersion {
-		printVersion()
-		return 0
-	}
-
-	// Get repository path from positional arguments
-	args := flag.Args()
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: repository path is required")
-		fmt.Fprintln(os.Stderr, "")
-		flag.Usage()
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		printUsage(os.Stderr)
 		return 1
 	}
-	repoPath := args[0]
 
-	// Run application
-	cfg := app.Config{
-		RepoPath:  repoPath,
-		OutputDir: outputDir,
-		Workers:   workers,
-		Limit:     limit,
-		Branch:    branch,
-		Verbose:   verbose,
+	if opts.showHelp {
+		printUsage(os.Stdout)
+		return 0
+	}
+	if opts.showVersion {
+		printVersion(os.Stdout, version, commit, date)
+		return 0
 	}
 
-	// Set up context with cancellation for graceful shutdown
+	// Cancel on interrupt so in-flight git and tar processes are torn down.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle interrupt signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -138,7 +128,7 @@ func Execute(version, commit, date string) int {
 		cancel()
 	}()
 
-	if err := app.Run(ctx, cfg); err != nil {
+	if err := app.Run(ctx, opts.cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -146,13 +136,23 @@ func Execute(version, commit, date string) int {
 	return 0
 }
 
-// printVersion displays version information
-func printVersion() {
-	fmt.Printf("%s version %s\n", appName, appVersion)
-	if appCommit != "none" {
-		fmt.Printf("  commit: %s\n", appCommit)
+// printUsage writes the help text followed by the generated flag list.
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, usage)
+	var o options
+	fs := newFlagSet(&o)
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}
+
+// printVersion writes version information, omitting fields that were not set
+// at build time.
+func printVersion(w io.Writer, version, commit, date string) {
+	fmt.Fprintf(w, "%s version %s\n", appName, version)
+	if commit != "none" {
+		fmt.Fprintf(w, "  commit: %s\n", commit)
 	}
-	if appDate != "unknown" {
-		fmt.Printf("  built:  %s\n", appDate)
+	if date != "unknown" {
+		fmt.Fprintf(w, "  built:  %s\n", date)
 	}
 }
