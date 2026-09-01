@@ -8,7 +8,7 @@ import (
 // rec builds a git log record field by field, so a test only names what it
 // cares about. Field order matches logFormat.
 type rec struct {
-	hash, short, tree              string
+	hash, tree                     string
 	an, ae, adate                  string
 	cn, ce, cdate                  string
 	gstatus, gsigner, gkey         string
@@ -20,7 +20,7 @@ type rec struct {
 
 func baseRec() rec {
 	return rec{
-		hash: "8f6a2b1c4d5e", short: "8f6a2b1", tree: "21b28cfd",
+		hash: "8f6a2b1c4d5e", tree: "21b28cfd",
 		an: "Alice Dev", ae: "alice@example.com", adate: "2023-12-05T14:30:22+01:00",
 		cn: "Alice Dev", ce: "alice@example.com", cdate: "2023-12-05T14:30:22+01:00",
 		gstatus: "N", subject: "Subject line", body: "Subject line\n",
@@ -29,7 +29,7 @@ func baseRec() rec {
 
 func (r rec) build() string {
 	fields := []string{
-		r.hash, r.short, r.tree,
+		r.hash, r.tree,
 		r.an, r.ae, r.adate,
 		r.cn, r.ce, r.cdate,
 		r.gstatus, r.gsigner, r.gkey, r.gfp, r.gtrust,
@@ -233,7 +233,7 @@ func TestParseCommitRecord(t *testing.T) {
 			tc.mutate(&r)
 			record := r.build()
 			if tc.name == "too few fields is an error" {
-				record = strings.Join([]string{"h", "s", "t"}, "\x00")
+				record = strings.Join([]string{"h", "t"}, "\x00")
 			}
 
 			got, err := parseCommitRecord(record)

@@ -34,7 +34,15 @@ const (
 
 	// fieldCount is how many fields logFormat emits. The message body is last so
 	// that the diff lines following it are unambiguously separate.
-	fieldCount = 20
+	fieldCount = 19
+
+	// shortHashLength is how much of a hash names a snapshot directory.
+	//
+	// Derived here rather than taken from git's %h, which honours core.abbrev
+	// from the examined repository's own config — so the same repository would
+	// explode into differently named directories depending on a setting in the
+	// thing being examined.
+	shortHashLength = 7
 
 	// logFormat requests every field a forensic record needs, in one pass.
 	//
@@ -44,7 +52,6 @@ const (
 	// locale and working hours, so it is evidence and must survive.
 	logFormat = "%x1e" +
 		"%H" + "%x00" + // commit hash
-		"%h" + "%x00" + // abbreviated hash
 		"%T" + "%x00" + // tree hash
 		"%an" + "%x00" + // author name
 		"%ae" + "%x00" + // author email
@@ -82,6 +89,9 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) ([]Commi
 		// the same files in the same order.
 		"--raw",
 		"--numstat",
+		// --raw abbreviates blob hashes to 7 characters by default, which is not
+		// enough to name an object unambiguously in a large repository.
+		"--no-abbrev",
 		// Without this git omits diffs for merge commits entirely, silently
 		// zeroing their change statistics. Reports a merge against its first
 		// parent, matching what git show does. Requires git 2.31 or newer.
@@ -140,43 +150,43 @@ func parseCommitRecord(record string) (Commit, error) {
 		return Commit{}, fmt.Errorf("invalid commit record: %q", record)
 	}
 
-	authorDate, err := parseGitDate(parts[5])
+	authorDate, err := parseGitDate(parts[4])
 	if err != nil {
 		return Commit{}, fmt.Errorf("invalid author date: %w", err)
 	}
-	commitDate, err := parseGitDate(parts[8])
+	commitDate, err := parseGitDate(parts[7])
 	if err != nil {
 		return Commit{}, fmt.Errorf("invalid commit date: %w", err)
 	}
 
 	var parents []string
-	if parts[14] != "" {
-		parents = strings.Fields(parts[14])
+	if parts[13] != "" {
+		parents = strings.Fields(parts[13])
 	}
 
 	commit := Commit{
 		Hash:           parts[0],
-		ShortHash:      parts[1],
-		TreeHash:       parts[2],
-		Author:         parts[3],
-		AuthorEmail:    parts[4],
+		ShortHash:      shortHash(parts[0]),
+		TreeHash:       parts[1],
+		Author:         parts[2],
+		AuthorEmail:    parts[3],
 		AuthorDate:     authorDate,
-		Committer:      parts[6],
-		CommitterEmail: parts[7],
+		Committer:      parts[5],
+		CommitterEmail: parts[6],
 		CommitDate:     commitDate,
 		Signature: Signature{
-			Status:      parts[9],
-			Signer:      parts[10],
-			Key:         parts[11],
-			Fingerprint: parts[12],
-			Trust:       parts[13],
+			Status:      parts[8],
+			Signer:      parts[9],
+			Key:         parts[10],
+			Fingerprint: parts[11],
+			Trust:       parts[12],
 		},
 		ParentHashes: parents,
-		Encoding:     parts[15],
-		Refs:         parts[16],
-		Notes:        strings.TrimSpace(parts[17]),
-		Subject:      parts[18],
-		FullMessage:  strings.TrimSpace(parts[19]),
+		Encoding:     parts[14],
+		Refs:         parts[15],
+		Notes:        strings.TrimSpace(parts[16]),
+		Subject:      parts[17],
+		FullMessage:  strings.TrimSpace(parts[18]),
 	}
 
 	if len(parts) > fieldCount {
@@ -189,6 +199,14 @@ func parseCommitRecord(record string) (Commit, error) {
 	}
 
 	return commit, nil
+}
+
+// shortHash abbreviates a commit hash for display and directory naming.
+func shortHash(hash string) string {
+	if len(hash) <= shortHashLength {
+		return hash
+	}
+	return hash[:shortHashLength]
 }
 
 // parseGitDate reads the ISO 8601 form git emits for %aI and %cI, preserving
@@ -300,7 +318,11 @@ func (r *Repository) RewrittenCommits(ctx context.Context, branch string, reacha
 		return nil, err
 	}
 
-	fromReflog, err := r.ListCommits(ctx, ListOptions{Tips: tips, Limit: limit, Reverse: true})
+	// Deliberately unlimited: the newest commits a reflog names are usually the
+	// reachable ones, so limiting the walk first would filter away almost
+	// everything and make --include-rewritten silently useless alongside -n.
+	// The limit is applied to the recovered set instead.
+	fromReflog, err := r.ListCommits(ctx, ListOptions{Tips: tips, Reverse: true})
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +339,11 @@ func (r *Repository) RewrittenCommits(ctx context.Context, branch string, reacha
 		}
 		c.Unreachable = true
 		rewritten = append(rewritten, c)
+	}
+
+	if limit > 0 && len(rewritten) > limit {
+		// Keep the newest, matching how -n selects reachable commits.
+		rewritten = rewritten[len(rewritten)-limit:]
 	}
 	return rewritten, nil
 }

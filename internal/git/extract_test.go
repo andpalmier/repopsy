@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // repoBuilder builds a temporary repository. Tests describe the tree they need
@@ -286,6 +287,40 @@ func TestExtractRefusesEscapingPaths(t *testing.T) {
 	}
 	if _, err := safeJoin(root, "ok/inside.txt"); err != nil {
 		t.Errorf("a normal path was refused: %v", err)
+	}
+}
+
+// TestExtractCommitReturnsOnWriteFailure guards a deadlock: writeTree streams
+// blob content from cat-file, so returning early leaves the child mid-write with
+// nobody draining stdout and the request goroutine mid-write to stdin. Both
+// block and the deferred Wait never returns. Needs more than 64KB of content so
+// the pipe buffer actually fills.
+func TestExtractCommitReturnsOnWriteFailure(t *testing.T) {
+	b := newRepo(t)
+	for _, name := range []string{"a.bin", "b.bin", "c.bin", "d.bin"} {
+		b.write(name, strings.Repeat("x", 80*1024), 0o644)
+	}
+	hash := b.commit("big files")
+
+	dest := filepath.Join(t.TempDir(), "snap")
+	// A directory where a file must go, so writing it fails.
+	if err := os.MkdirAll(filepath.Join(dest, "a.bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.open().ExtractCommit(context.Background(), hash, dest)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a write error")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("ExtractCommit deadlocked instead of returning an error")
 	}
 }
 

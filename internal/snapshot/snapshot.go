@@ -141,6 +141,8 @@ Deletions:      -{{.Deletions}}
 
 CHANGED FILES
 -------------
+Status, line counts, the new content's blob hash, and the path.
+
 {{if .Files}}{{range .Files}}{{fileLine .}}
 {{end}}{{else}}(no file changes recorded)
 {{end}}{{if .Submodules}}
@@ -183,11 +185,26 @@ func fileLine(f git.FileChange) string {
 		path = f.OldPath + " -> " + f.Path
 	}
 
-	line := fmt.Sprintf("%-4s %s %s", status, counts, path)
+	// The blob hash names this file's content in the object store, so a reader
+	// can retrieve and verify it with "git cat-file -p" against the original
+	// repository. Abbreviated to keep the row readable; git resolves a prefix.
+	line := fmt.Sprintf("%-4s %s %-12s %s", status, counts, blobRef(f.NewBlob), path)
 	if f.ModeChanged() {
 		line += fmt.Sprintf("  [mode %s -> %s]", f.OldMode, f.NewMode)
 	}
 	return line
+}
+
+// blobRef abbreviates a blob hash, or marks its absence for a deleted file.
+func blobRef(blob string) string {
+	const width = 12
+	if blob == "" || strings.Trim(blob, "0") == "" {
+		return strings.Repeat("-", width)
+	}
+	if len(blob) > width {
+		return blob[:width]
+	}
+	return blob
 }
 
 // formatGPGStatus renders git's %G? signature codes as prose.

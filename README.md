@@ -175,8 +175,11 @@ When extracting a single branch:
 ```
 
 Snapshot directory names are timestamped in **the offset the commit itself
-records**, never the offset of the machine running repopsy, so the same
-repository always explodes into the same directory names on any host.
+records**, never the offset of the machine running repopsy, and the short hash is
+derived from the full commit hash rather than from git's `%h` — which honours
+`core.abbrev` from the examined repository's own configuration. The same
+repository therefore always explodes into the same directory names, on any host
+and whatever the examined repository is configured to do.
 
 ## Known Limitations
 
@@ -267,8 +270,14 @@ if only the verdict is recorded.
 
 **Changed files** — every path the commit touched, with its status letter
 (`A` added, `M` modified, `D` deleted, `R` renamed, `C` copied, `T` type
-changed), line counts, and both file modes. A mode change is called out
-explicitly: `100644 -> 100755` means a file became executable.
+changed), line counts, the blob hash of the new content, and both file modes. A
+mode change is called out explicitly: `100644 -> 100755` means a file became
+executable. The blob hash names the content in the object store, so it can be
+retrieved and verified against the original repository:
+
+```bash
+git cat-file -p 615eb37b3006
+```
 
 **Change statistics** are measured against the commit's first parent. A merge
 commit is measured the same way, so changes brought in from the other side of
@@ -333,9 +342,11 @@ Deletions:      -3
 
 CHANGED FILES
 -------------
-M    +1      -1      go.mod
-M    +4      -2      scripts/deploy.sh  [mode 100644 -> 100755]
-A    binary          demo.gif
+Status, line counts, the new content's blob hash, and the path.
+
+M    +1      -1      9817e7ca8f21 go.mod
+M    +4      -2      bbb2222aaa11 scripts/deploy.sh  [mode 100644 -> 100755]
+A    binary          ccc3333ddd44 demo.gif
 
 COMMIT MESSAGE
 --------------

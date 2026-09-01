@@ -42,9 +42,11 @@ Deletions:      -3
 
 CHANGED FILES
 -------------
-M    +1      -1      go.mod
-M    +4      -2      scripts/deploy.sh  [mode 100644 -> 100755]
-A    binary          demo.gif
+Status, line counts, the new content's blob hash, and the path.
+
+M    +1      -1      9817e7c      go.mod
+M    +4      -2      bbb2222      scripts/deploy.sh  [mode 100644 -> 100755]
+A    binary          ccc3333      demo.gif
 
 COMMIT MESSAGE
 --------------

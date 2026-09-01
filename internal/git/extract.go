@@ -38,9 +38,6 @@ type Submodule struct {
 
 // ExtractResult describes what one extraction produced.
 type ExtractResult struct {
-	// Files is the number of blobs written.
-	Files int
-
 	// Submodules are the gitlinks encountered, whose content is not captured.
 	Submodules []Submodule
 
@@ -118,8 +115,7 @@ func (r *Repository) listTree(ctx context.Context, hash string) ([]treeEntry, er
 
 // writeTree materialises entries under destPath, streaming their content from a
 // single cat-file process.
-func (r *Repository) writeTree(ctx context.Context, destPath string, entries []treeEntry) (ExtractResult, error) {
-	var result ExtractResult
+func (r *Repository) writeTree(ctx context.Context, destPath string, entries []treeEntry) (result ExtractResult, err error) {
 
 	// Gitlinks have no content to fetch, so they are handled without cat-file.
 	var blobs []treeEntry
@@ -147,7 +143,22 @@ func (r *Repository) writeTree(ctx context.Context, destPath string, entries []t
 	if err := cmd.Start(); err != nil {
 		return result, fmt.Errorf("failed to start git cat-file: %w", err)
 	}
-	defer func() { _ = cmd.Wait() }()
+
+	// Returning early leaves cat-file mid-write with nobody draining stdout and
+	// the request goroutine mid-write to stdin, so both block and Wait never
+	// returns. Killing the child releases them. On success stdin has been closed
+	// and all output consumed, so cat-file exits on its own and a non-zero exit
+	// is worth reporting.
+	defer func() {
+		if err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return
+		}
+		if waitErr := cmd.Wait(); waitErr != nil {
+			err = fmt.Errorf("git cat-file failed: %w", waitErr)
+		}
+	}()
 
 	// Requests are written while responses are read, rather than in lockstep:
 	// a round trip per blob costs more than the whole extraction. cat-file
@@ -175,7 +186,6 @@ func (r *Repository) writeTree(ctx context.Context, destPath string, entries []t
 		}
 		sum := sha256.Sum256(content)
 		result.Digests = append(result.Digests, FileDigest{Path: e.path, SHA256: hex.EncodeToString(sum[:])})
-		result.Files++
 	}
 
 	return result, nil
