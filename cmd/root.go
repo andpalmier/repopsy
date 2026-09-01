@@ -149,10 +149,10 @@ func parseArgs(args []string, warn io.Writer) (options, error) {
 	// header reports is the value that is actually used.
 	switch {
 	case o.cfg.Workers > maxWorkers:
-		fmt.Fprintf(warn, "⚠ Workers capped at %d (requested %d)\n", maxWorkers, o.cfg.Workers)
+		_, _ = fmt.Fprintf(warn, "⚠ Workers capped at %d (requested %d)\n", maxWorkers, o.cfg.Workers)
 		o.cfg.Workers = maxWorkers
 	case o.cfg.Workers < 1:
-		fmt.Fprintf(warn, "⚠ Workers must be at least 1, using %d\n", defaultWorkers())
+		_, _ = fmt.Fprintf(warn, "⚠ Workers must be at least 1, using %d\n", defaultWorkers())
 		o.cfg.Workers = defaultWorkers()
 	}
 
@@ -176,7 +176,7 @@ func Execute(version, commit, date string) int {
 func run(args []string, stdout, stderr io.Writer, b build) int {
 	opts, err := parseArgs(args, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n\n", err)
 		printUsage(stderr)
 		return 1
 	}
@@ -208,12 +208,12 @@ func run(args []string, stdout, stderr io.Writer, b build) int {
 	defer signal.Stop(sigChan)
 	go func() {
 		<-sigChan
-		fmt.Fprintln(stderr, "\n⚠ Interrupted, cleaning up...")
+		_, _ = fmt.Fprintln(stderr, "\n⚠ Interrupted, cleaning up...")
 		cancel()
 	}()
 
 	if err := app.Run(ctx, opts.cfg); err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return 1
 	}
 
@@ -222,7 +222,7 @@ func run(args []string, stdout, stderr io.Writer, b build) int {
 
 // printUsage writes the help text followed by the generated flag list.
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, usage)
+	_, _ = fmt.Fprint(w, usage)
 	var o options
 	fs := newFlagSet(&o)
 	fs.SetOutput(w)
@@ -232,11 +232,11 @@ func printUsage(w io.Writer) {
 // printVersion writes version information, omitting fields that were not set
 // at build time.
 func printVersion(w io.Writer, version, commit, date string) {
-	fmt.Fprintf(w, "%s version %s\n", appName, version)
+	_, _ = fmt.Fprintf(w, "%s version %s\n", appName, version)
 	if commit != "none" {
-		fmt.Fprintf(w, "  commit: %s\n", commit)
+		_, _ = fmt.Fprintf(w, "  commit: %s\n", commit)
 	}
 	if date != "unknown" {
-		fmt.Fprintf(w, "  built:  %s\n", date)
+		_, _ = fmt.Fprintf(w, "  built:  %s\n", date)
 	}
 }

@@ -25,7 +25,7 @@ func newRepo(t *testing.T) *repo {
 func (r *repo) open() *Repository {
 	repository, err := Open(r.Dir)
 	if err != nil {
-		r.Repo.Git("status") // surface anything useful before failing
+		r.Git("status") // surface anything useful before failing
 		panic(err)
 	}
 	return repository

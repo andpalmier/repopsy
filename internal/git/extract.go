@@ -164,7 +164,7 @@ func (r *Repository) writeTree(ctx context.Context, destPath string, entries []t
 	// answers in order, so the reader still knows which entry it is looking at.
 	// Neither pipe can deadlock because stdout is drained throughout.
 	go func() {
-		defer stdin.Close()
+		defer func() { _ = stdin.Close() }()
 		w := bufio.NewWriter(stdin)
 		for _, e := range blobs {
 			if _, err := fmt.Fprintln(w, e.sha); err != nil {
