@@ -12,6 +12,9 @@ import (
 	"github.com/fatih/color"
 )
 
+// outputSuffix is appended to the repository name to name the output directory.
+const outputSuffix = "-exploded"
+
 // Config holds the application configuration
 type Config struct {
 	RepoPath  string
@@ -34,7 +37,7 @@ func Run(ctx context.Context, cfg Config) error {
 	outDir := cfg.OutputDir
 	if outDir == "" {
 		baseName := filepath.Base(repo.Path)
-		outDir = baseName + "-exploded"
+		outDir = baseName + outputSuffix
 	}
 
 	// Resolve to absolute path

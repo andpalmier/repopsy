@@ -63,24 +63,3 @@ func (r *Repository) GetCommitStats(ctx context.Context, hash string) (CommitSta
 func (r *Repository) GetCommitFullMessage(ctx context.Context, hash string) (string, error) {
 	return r.runGitCommand(ctx, "log", "-1", "--format=%B", hash)
 }
-
-// GetCommitParents returns the parent commit hashes.
-func (r *Repository) GetCommitParents(ctx context.Context, hash string) ([]string, error) {
-	parentStr, err := r.runGitCommand(ctx, "log", "-1", "--format=%P", hash)
-	if err != nil {
-		return nil, err
-	}
-	if parentStr == "" {
-		return nil, nil // Root commit
-	}
-	return strings.Fields(parentStr), nil
-}
-
-// GetFileDiff returns the diff for a specific commit
-func (r *Repository) GetFileDiff(ctx context.Context, hash string) (string, error) {
-	output, err := r.runGitCommand(ctx, "diff-tree", "-p", "--root", hash)
-	if err != nil {
-		return "", err
-	}
-	return output, nil
-}

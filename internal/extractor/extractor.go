@@ -8,17 +8,18 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/andpalmier/repopsy/internal/config"
 	"github.com/andpalmier/repopsy/internal/git"
 	"github.com/andpalmier/repopsy/internal/progress"
 )
 
+// folderTimestampFormat names a snapshot directory: 20231205_143022_abc1234.
+const folderTimestampFormat = "20060102_150405"
+
 // Config configures the extraction process.
 type Config struct {
-	OutputDir  string
-	Workers    int
-	Verbose    bool
-	BufferSize int // Scanner buffer size in bytes (default: 1MB)
+	OutputDir string
+	Workers   int
+	Verbose   bool
 }
 
 // Result represents the outcome of a single commit
@@ -39,10 +40,6 @@ type Extractor struct {
 func New(repo *git.Repository, cfg Config) *Extractor {
 	if cfg.Workers <= 0 {
 		cfg.Workers = runtime.NumCPU()
-	}
-	// Default buffer size: 1MB (suitable for repos with many files per commit)
-	if cfg.BufferSize < config.MinBufferSize {
-		cfg.BufferSize = config.DefaultBufferSize
 	}
 	return &Extractor{repo: repo, config: cfg}
 }
@@ -140,7 +137,7 @@ func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- 
 // extractOne extracts a single commit and returns the result
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int) Result {
 	// Format: YYYYMMDD_HHMMSS_hash (e.g., 20231205_143022_abc1234)
-	timestamp := commit.AuthorDate.Format("20060102_150405")
+	timestamp := commit.AuthorDate.Format(folderTimestampFormat)
 	folderName := fmt.Sprintf("%s_%s", timestamp, commit.ShortHash)
 	outputPath := filepath.Join(e.config.OutputDir, folderName)
 

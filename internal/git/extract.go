@@ -2,70 +2,24 @@
 package git
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 )
+
+// dirPerms is the mode for directories created to hold a snapshot.
+const dirPerms = 0o755
 
 // ExtractCommit extracts the contents of a commit to the specified destination path
 func (r *Repository) ExtractCommit(ctx context.Context, hash, destPath string) error {
-	if err := os.MkdirAll(destPath, 0755); err != nil {
+	if err := os.MkdirAll(destPath, dirPerms); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
 	}
 	// Use 'git archive' piped to 'tar' to extract the commit
 	// This avoids checking out the commit into the working directory
 	return r.runArchiveToTar(ctx, []string{"archive", "--format=tar", hash}, destPath)
-}
-
-// ExtractCommitExcludingBinaries extracts commit contents, excluding binary files
-func (r *Repository) ExtractCommitExcludingBinaries(ctx context.Context, hash, destPath string, excludeBinaries bool) error {
-	if !excludeBinaries {
-		return r.ExtractCommit(ctx, hash, destPath)
-	}
-
-	// Get all files in this commit
-	allFiles, err := r.listFiles(ctx, hash)
-	if err != nil {
-		return r.ExtractCommit(ctx, hash, destPath)
-	}
-
-	// Get binary files
-	binaryFiles, err := r.listBinaryFiles(ctx, hash)
-	if err != nil {
-		return r.ExtractCommit(ctx, hash, destPath)
-	}
-
-	// If no binaries, standard extraction is faster
-	if len(binaryFiles) == 0 {
-		return r.ExtractCommit(ctx, hash, destPath)
-	}
-
-	// Filter to only non-binary files
-	var textFiles []string
-	for _, file := range allFiles {
-		if !binaryFiles[file] {
-			textFiles = append(textFiles, file)
-		}
-	}
-
-	// If all files are binary, nothing to extract
-	if len(textFiles) == 0 {
-		return os.MkdirAll(destPath, 0755)
-	}
-
-	if err := os.MkdirAll(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	// Build archive command with explicit pathspecs (files to include)
-	archiveArgs := []string{"archive", "--format=tar", hash, "--"}
-	archiveArgs = append(archiveArgs, textFiles...)
-
-	return r.runArchiveToTar(ctx, archiveArgs, destPath)
 }
 
 // runArchiveToTar executes git archive piped to tar for extraction
@@ -106,48 +60,4 @@ func (r *Repository) runArchiveToTar(ctx context.Context, archiveArgs []string, 
 		return fmt.Errorf("tar extraction failed: %s", tarStderr.String())
 	}
 	return nil
-}
-
-// listFiles returns all files in a commit
-func (r *Repository) listFiles(ctx context.Context, hash string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-tree", "-r", "--name-only", hash)
-	cmd.Dir = r.Path
-
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list files: %w", err)
-	}
-
-	var files []string
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		if line := scanner.Text(); line != "" {
-			files = append(files, line)
-		}
-	}
-	return files, nil
-}
-
-// listBinaryFiles returns a set of file paths that are binary in the given commit
-func (r *Repository) listBinaryFiles(ctx context.Context, hash string) (map[string]bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff-tree", "--numstat", "-r", "--root", hash)
-	cmd.Dir = r.Path
-
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list binary files: %w", err)
-	}
-
-	binaryFiles := make(map[string]bool)
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Binary files show as: -\t-\tfilename
-		if strings.HasPrefix(line, "-\t-\t") {
-			filename := strings.TrimPrefix(line, "-\t-\t")
-			binaryFiles[filename] = true
-		}
-	}
-
-	return binaryFiles, nil
 }

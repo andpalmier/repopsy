@@ -4,7 +4,7 @@ package git
 import (
 	"bufio"
 	"bytes"
-	"context" // added context
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -105,23 +105,4 @@ func parseCommitLine(line string) (Commit, error) {
 		ParentHashes:   parents,
 		Subject:        parts[10],
 	}, nil
-}
-
-// CommitCount returns the total number of commits in the repository
-func (r *Repository) CommitCount(ctx context.Context, branch string) (int, error) {
-	ref := branch
-	if ref == "" {
-		ref = "HEAD"
-	}
-
-	output, err := r.runGitCommand(ctx, "rev-list", "--count", ref)
-	if err != nil {
-		return 0, fmt.Errorf("failed to count commits: %w", err)
-	}
-
-	count, err := strconv.Atoi(output)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse commit count: %w", err)
-	}
-	return count, nil
 }

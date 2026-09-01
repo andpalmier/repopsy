@@ -8,18 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/andpalmier/repopsy/internal/config"
 )
 
 // Repository represents an opened git repository.
 type Repository struct {
 	// Path is the absolute path to the repository root
 	Path string
-
-	// BufferSize is the scanner buffer size for git operations
-	// Default: 1MB (set by Open if not specified)
-	BufferSize int
 }
 
 // Open opens and validates a git repository at the given path
@@ -72,10 +66,7 @@ func Open(path string) (*Repository, error) {
 		}
 	}
 
-	return &Repository{
-		Path:       absPath,
-		BufferSize: config.DefaultBufferSize,
-	}, nil
+	return &Repository{Path: absPath}, nil
 }
 
 // runGitCommand executes a git command and returns trimmed output.
@@ -90,14 +81,6 @@ func (r *Repository) runGitCommand(ctx context.Context, args ...string) (string,
 		return "", fmt.Errorf("git %s failed: %w", args[0], err)
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-// GetBufferSize returns the scanner buffer size, defaulting to 1MB if not set
-func (r *Repository) GetBufferSize() int {
-	if r.BufferSize > 0 {
-		return r.BufferSize
-	}
-	return config.DefaultBufferSize
 }
 
 // ListBranches returns all local branch names in the repository.

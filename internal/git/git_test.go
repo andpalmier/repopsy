@@ -79,16 +79,3 @@ func TestContextCancellation(t *testing.T) {
 		t.Error("expected error due to cancelled context, got nil")
 	}
 }
-
-func TestCommitCount(t *testing.T) {
-	repo := setupTestRepo(t)
-
-	count, err := repo.CommitCount(context.Background(), "")
-	if err != nil {
-		t.Fatalf("CommitCount failed: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
-	}
-}

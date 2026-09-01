@@ -78,11 +78,6 @@ type Commit struct {
 	Deletions      int
 }
 
-// String returns a human-readable representation of the commit
-func (c Commit) String() string {
-	return c.ShortHash + " " + c.Subject
-}
-
 // WriteMetadataFile writes a COMMIT_INFO.txt file with commit metadata
 func (c Commit) WriteMetadataFile(destPath string) (err error) {
 	metadataPath := filepath.Join(destPath, "COMMIT_INFO.txt")
