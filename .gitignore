@@ -24,10 +24,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Agent skill config and local issue tracker (not tracked)
-CLAUDE.md
-docs/agents/
-.scratch/
 
 # CI builds the release-layout binary here for the Docker image
 /linux/
