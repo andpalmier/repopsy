@@ -143,12 +143,13 @@ func TestExtractCommitEmptyCommit(t *testing.T) {
 	}
 }
 
-// TestExtractIgnoresExportIgnore is the inversion of a test that used to assert
-// the opposite. A repository could withhold files from its own snapshot with
-// .gitattributes export-ignore, because git archive honours it and offers no way
-// to override it. Reading the tree with ls-tree and cat-file bypasses attributes
-// entirely, so the subject of an investigation no longer chooses what is
-// collected. See docs/adr/0005.
+// TestExtractIgnoresExportIgnore holds the line on a property that matters more
+// than it looks: a repository cannot withhold files from its own snapshot.
+//
+// git archive honours .gitattributes export-ignore and offers no way to override
+// it, which would let the subject of an investigation choose what gets
+// collected. Reading the tree with ls-tree and cat-file bypasses attributes
+// entirely. See docs/adr/0005.
 func TestExtractIgnoresExportIgnore(t *testing.T) {
 	b := newRepo(t)
 	b.Write("normal.txt", "public\n", 0o644)
