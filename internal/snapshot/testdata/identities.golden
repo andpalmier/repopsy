@@ -1,0 +1,25 @@
+IDENTITIES
+===========================
+
+Every distinct name and email pair in the extracted history, most active first.
+Counts are the number of commits in which the identity appeared in each role.
+
+Alice Dev <alice@example.com>
+  Commits:      1 as author, 2 as committer
+  First seen:   2023-01-01T09:00:00+01:00
+  Last seen:    2023-02-01T09:00:00+01:00
+Bob Ops <alice@example.com>
+  Commits:      1 as author, 0 as committer
+  First seen:   2023-02-01T09:00:00+01:00
+  Last seen:    2023-02-01T09:00:00+01:00
+
+COLLISIONS
+----------
+One email under several names, or one name under several emails, is invisible
+commit by commit. It is how both impersonation and a misconfigured client look.
+
+Emails used under more than one name:
+  alice@example.com used by: Alice Dev, Bob Ops
+
+Names used with more than one email:
+  (none)

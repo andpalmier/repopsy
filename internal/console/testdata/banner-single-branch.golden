@@ -1,0 +1,12 @@
+
+┌─────────────────────────────────────────┐
+│                 repopsy                 │
+│ Repository Autopsy tool by @andpalmier  │
+└─────────────────────────────────────────┘
+
+Repository:  /repos/demo
+Branch:      main
+Output:      /out/demo-exploded
+Workers:     4
+Limit:       25 commits
+

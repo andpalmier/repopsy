@@ -2,62 +2,29 @@ package git
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"testing"
 )
 
-// setupTestRepo creates a temporary git repository with some commits
+// setupTestRepo creates a repository with two commits, the second carrying a
+// character that has tripped up field-separated parsing before.
 func setupTestRepo(t *testing.T) *Repository {
-	dir, err := os.MkdirTemp("", "repopsy-test-")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	// Cleanup
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v failed: %v\nOutput: %s", args, err, out)
-		}
-	}
-
-	run("init")
-	run("config", "user.name", "Test User")
-	run("config", "user.email", "test@example.com")
-
-	// Commit 1
-	if err := os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("content1"), 0644); err != nil {
-		t.Fatalf("failed to write file1: %v", err)
-	}
-	run("add", "file1.txt")
-	run("commit", "-m", "Initial commit")
-
-	// Commit 2: Special char in subject
-	if err := os.WriteFile(filepath.Join(dir, "file2.txt"), []byte("content2"), 0644); err != nil {
-		t.Fatalf("failed to write file2: %v", err)
-	}
-	run("add", "file2.txt")
-	run("commit", "-m", "Commit with | pipe")
-
-	repo, err := Open(dir)
-	if err != nil {
-		t.Fatalf("failed to open repo: %v", err)
-	}
-
-	return repo
+	t.Helper()
+	b := newRepo(t)
+	b.Write("file1.txt", "content1", 0o644)
+	b.Commit("Initial commit")
+	b.Write("file2.txt", "content2", 0o644)
+	b.Commit("Commit with | pipe")
+	return b.open()
 }
 
 func TestListCommits(t *testing.T) {
 	repo := setupTestRepo(t)
 
-	commits, err := repo.ListCommits(context.Background(), ListOptions{})
+	listed, err := repo.ListCommits(context.Background(), ListOptions{})
 	if err != nil {
 		t.Fatalf("ListCommits failed: %v", err)
 	}
+	commits := listed.Commits
 
 	if len(commits) != 2 {
 		t.Errorf("expected 2 commits, got %d", len(commits))
@@ -78,18 +45,5 @@ func TestContextCancellation(t *testing.T) {
 	_, err := repo.ListCommits(ctx, ListOptions{})
 	if err == nil {
 		t.Error("expected error due to cancelled context, got nil")
-	}
-}
-
-func TestCommitCount(t *testing.T) {
-	repo := setupTestRepo(t)
-
-	count, err := repo.CommitCount(context.Background(), "")
-	if err != nil {
-		t.Fatalf("CommitCount failed: %v", err)
-	}
-
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
 	}
 }

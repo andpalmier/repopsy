@@ -1,35 +1,51 @@
+// Package extractor extracts many commits concurrently, bounded by a worker
+// count, and reports one result per commit in commit order however the workers
+// interleave.
 package extractor
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 
-	"github.com/andpalmier/repopsy/internal/config"
+	"github.com/andpalmier/repopsy/internal/console"
 	"github.com/andpalmier/repopsy/internal/git"
-	"github.com/andpalmier/repopsy/internal/progress"
+	"github.com/andpalmier/repopsy/internal/snapshot"
 )
 
 // Config configures the extraction process.
 type Config struct {
-	OutputDir  string
-	Workers    int
-	Verbose    bool
-	BufferSize int // Scanner buffer size in bytes (default: 1MB)
+	// OutputDir is the root of the exploded repository.
+	OutputDir string
+
+	// Branch names the branch being extracted. When set, snapshots nest under
+	// directories mirroring its ref path; when empty they sit directly under
+	// OutputDir.
+	Branch string
+
+	// Workers bounds how many commits are extracted at once.
+	Workers int
+
+	// Verbose prints a line per completed commit alongside the progress bar.
+	Verbose bool
+
+	// Writer receives progress output. Defaults to standard error.
+	Writer io.Writer
 }
 
-// Result represents the outcome of a single commit
+// Result is the outcome of extracting one commit.
 type Result struct {
 	Commit     git.Commit
-	Index      int
 	OutputPath string
 	Error      error
 }
 
-// Extractor coordinates the extraction of multiple commits using a worker pool
+// Extractor extracts many commits concurrently, bounded by a worker count.
 type Extractor struct {
 	repo   *git.Repository
 	config Config
@@ -40,134 +56,118 @@ func New(repo *git.Repository, cfg Config) *Extractor {
 	if cfg.Workers <= 0 {
 		cfg.Workers = runtime.NumCPU()
 	}
-	// Default buffer size: 1MB (suitable for repos with many files per commit)
-	if cfg.BufferSize < config.MinBufferSize {
-		cfg.BufferSize = config.DefaultBufferSize
-	}
 	return &Extractor{repo: repo, config: cfg}
 }
 
-// job represents a single extraction task sent to workers
-type job struct {
-	commit git.Commit
-	index  int
-}
-
-// Run extracts all provided commits concurrently
+// Run extracts all provided commits concurrently, returning one Result per
+// commit attempted, in commit order.
 func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, error) {
 	if len(commits) == 0 {
 		return nil, nil
 	}
 
-	// Initialize progress reporter
-	reporter := progress.New(progress.Config{
-		Total:   len(commits),
-		Verbose: e.config.Verbose,
-	})
-	reporter.Start()
+	progress := console.NewProgress(e.config.Writer, len(commits), e.config.Verbose)
 
-	// jobs channel receives tasks (commits to connect)
-	// results channel collects the extractions
-	jobs := make(chan job, len(commits))
-	results := make(chan Result, len(commits))
+	// Results are addressed by index, so they stay in commit order however the
+	// workers interleave, and no channel is needed to collect them.
+	results := make([]Result, len(commits))
 
-	// Start worker pool
+	// A slot is taken before each goroutine is spawned, so at most Workers
+	// extractions are ever in flight.
+	slots := make(chan struct{}, e.config.Workers)
 	var wg sync.WaitGroup
-	for i := 0; i < e.config.Workers; i++ {
+
+	dispatched := 0
+	for i, commit := range commits {
+		if ctx.Err() != nil {
+			break
+		}
+
+		slots <- struct{}{}
+		dispatched++
 		wg.Add(1)
+
 		go func() {
 			defer wg.Done()
-			e.worker(ctx, jobs, results, reporter)
+			defer func() { <-slots }()
+
+			result := e.extractOne(ctx, commit)
+			results[i] = result
+
+			if result.Error != nil {
+				progress.Failed(commit.ShortHash, result.Error)
+			} else {
+				progress.Done(commit.ShortHash, result.OutputPath)
+			}
 		}()
 	}
 
-	// Send jobs to workers
-	for i, commit := range commits {
-		jobs <- job{commit: commit, index: i}
-	}
-	close(jobs)
+	wg.Wait()
+	progress.Finish()
 
-	// Wait for all workers to complete, then close results channel
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+	// Commits never dispatched — the context was cancelled — have no result.
+	results = results[:dispatched]
 
-	// Collect results
-	allResults := make([]Result, 0, len(commits))
-	var extractionErrs []error
-
-	for result := range results {
-		allResults = append(allResults, result)
-		if result.Error != nil {
-			extractionErrs = append(extractionErrs, result.Error)
+	var failures []error
+	for _, r := range results {
+		if r.Error != nil {
+			failures = append(failures, r.Error)
 		}
 	}
-
-	reporter.Finish()
-
-	if len(extractionErrs) > 0 {
-		return allResults, fmt.Errorf("%d of %d extractions failed: %w",
-			len(extractionErrs), len(commits), errors.Join(extractionErrs...))
+	if len(failures) > 0 {
+		return results, fmt.Errorf("%d of %d extractions failed: %w",
+			len(failures), len(commits), errors.Join(failures...))
 	}
 
-	return allResults, nil
+	return results, nil
 }
 
-// worker processes jobs from the jobs channel
-func (e *Extractor) worker(ctx context.Context, jobs <-chan job, results chan<- Result, reporter *progress.Reporter) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case j, ok := <-jobs:
-			if !ok {
-				return
-			}
+// extractOne extracts one commit and writes its snapshot's records.
+func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
+	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
 
-			result := e.extractOne(ctx, j.commit, j.index)
-			results <- result
-
-			if result.Error != nil {
-				reporter.Increment(fmt.Sprintf("✗ %s: %v", j.commit.ShortHash, result.Error))
-			} else {
-				reporter.Increment(fmt.Sprintf("✓ %s → %s", j.commit.ShortHash, filepath.Base(result.OutputPath)))
-			}
-		}
-	}
-}
-
-// extractOne extracts a single commit and returns the result
-func (e *Extractor) extractOne(ctx context.Context, commit git.Commit, index int) Result {
-	// Format: YYYYMMDD_HHMMSS_hash (e.g., 20231205_143022_abc1234)
-	timestamp := commit.AuthorDate.Format("20060102_150405")
-	folderName := fmt.Sprintf("%s_%s", timestamp, commit.ShortHash)
-	outputPath := filepath.Join(e.config.OutputDir, folderName)
-
-	// Extract commit contents
-	err := e.repo.ExtractCommit(ctx, commit.Hash, outputPath)
-
-	// Always write metadata if extraction succeeded
+	// Content goes one level below the snapshot's own records, so a file in the
+	// commit can never overwrite one of them.
+	//
+	// The commit already carries its message body and change statistics from
+	// ListCommits, so no further git calls are needed here.
+	extracted, err := e.repo.ExtractCommit(ctx, commit.Hash, snapshot.TreePath(snapshotPath))
 	if err == nil {
-		if fullMsg, msgErr := e.repo.GetCommitFullMessage(ctx, commit.Hash); msgErr == nil {
-			commit.FullMessage = fullMsg
-		}
+		// Only the tree listing knows which gitlinks the commit contains.
+		commit.Submodules = extracted.Submodules
 
-		if stats, statsErr := e.repo.GetCommitStats(ctx, commit.Hash); statsErr == nil {
-			commit.FilesChanged = stats.FilesChanged
-			commit.Insertions = stats.Insertions
-			commit.Deletions = stats.Deletions
-		}
-
-		if metaErr := commit.WriteMetadataFile(outputPath); metaErr != nil {
+		if metaErr := writeSnapshotFile(snapshotPath, snapshot.MetadataFilename, func(w io.Writer) error {
+			return snapshot.WriteMetadata(w, commit)
+		}); metaErr != nil {
 			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
+		}
+		if sumErr := writeSnapshotFile(snapshotPath, snapshot.ChecksumFilename, func(w io.Writer) error {
+			return snapshot.WriteChecksums(w, extracted.Digests)
+		}); sumErr != nil && err == nil {
+			err = fmt.Errorf("extraction succeeded but checksum write failed: %w", sumErr)
 		}
 	}
 
 	return Result{
 		Commit:     commit,
-		Index:      index,
-		OutputPath: outputPath,
+		OutputPath: snapshotPath,
 		Error:      err,
 	}
+}
+
+// writeSnapshotFile creates one file inside a snapshot directory. The snapshot
+// module renders the contents; creating and closing the file is the caller's
+// job, which keeps the rendering reachable in tests without a filesystem.
+func writeSnapshotFile(snapshotPath, name string, render func(io.Writer) error) (err error) {
+	f, err := os.Create(filepath.Join(snapshotPath, name))
+	if err != nil {
+		return fmt.Errorf("failed to create %s: %w", name, err)
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("failed to close %s: %w", name, closeErr)
+		}
+	}()
+
+	return render(f)
 }

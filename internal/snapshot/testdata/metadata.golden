@@ -1,0 +1,59 @@
+COMMIT INFORMATION
+===========================
+
+Hash:           8f6a2b1c4d5e6f70819243546576879a0b1c2d3e
+Short Hash:     8f6a2b1
+Tree:           21b28cfd6375d10b1cda85f50a998fdf1557404f
+Refs:           HEAD -> main, tag: v1.2.3
+
+AUTHOR (who wrote the code)
+---------------------------
+Name:           Alice Dev
+Email:          alice@example.com
+Date:           2023-12-05T14:30:22+01:00
+Timestamp:      1701783022
+
+COMMITTER (who applied the commit)
+----------------------------------
+Name:           Bob Ops
+Email:          bob@example.com
+Date:           2023-12-05T15:00:00+01:00
+Timestamp:      1701784800
+
+NOTE: Author and Committer are different.
+
+VERIFICATION
+------------
+GPG Signature:  Valid signature (good)
+Signer:         Alice Dev <alice@example.com>
+Key:            ABCD1234EF567890
+Fingerprint:    FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444
+Trust:          ultimate
+
+LINEAGE
+-------
+Parents:        7e5d1c2b 
+
+CHANGE STATISTICS
+-----------------
+Files Changed:  3
+Insertions:     +5
+Deletions:      -3
+
+CHANGED FILES
+-------------
+Status, line counts, the new content's blob hash, and the path.
+
+M    +1      -1      9817e7c      go.mod
+M    +4      -2      bbb2222      scripts/deploy.sh  [mode 100644 -> 100755]
+A    binary          ccc3333      demo.gif
+
+COMMIT MESSAGE
+--------------
+Subject:
+Fix the extraction logic
+
+Full Message:
+Fix the extraction logic
+
+Longer body here.

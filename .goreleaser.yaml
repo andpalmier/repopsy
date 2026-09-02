@@ -51,70 +51,54 @@ changelog:
       - "^chore:"
       - "Merge pull request"
 
-brews:
+# Replaces the deprecated "brews" section. Note this publishes a Homebrew *cask*
+# rather than a formula: casks are macOS-only, and the tap directory moves from
+# Formula to Casks.
+homebrew_casks:
   - name: repopsy
     repository:
       owner: andpalmier
       name: homebrew-tap
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/andpalmier/repopsy"
     description: "Forensic tool for analyzing git repository history"
-    license: "AGPL-3.0"
-    test: |
-      system "#{bin}/repopsy --version"
+    # Homebrew quarantines what a cask downloads, and these binaries are neither
+    # signed nor notarized, so macOS would refuse to run them with "repopsy is
+    # damaged and cannot be opened". Formulae did not have this problem, so this
+    # is required by the move to casks rather than optional.
+    #
+    # This clears Gatekeeper's quarantine attribute, which is a bypass: Apple may
+    # withdraw it, and signing plus notarization is the durable answer. Doing
+    # that needs an Apple Developer account, so it is a separate decision.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/repopsy"]
+          end
 
-dockers:
-  - image_templates:
-      - "ghcr.io/andpalmier/repopsy:{{ .Version }}-amd64"
-      - "ghcr.io/andpalmier/repopsy:latest-amd64"
-    use: buildx
-    goos: linux
-    goarch: amd64
-    extra_files:
-      - go.mod
-      - go.sum
-      - main.go
-      - internal
-      - cmd
+# Replaces the deprecated "dockers" and "docker_manifests" sections. One entry
+# now covers both architectures: dockers_v2 runs "docker buildx build" across
+# platforms and pushes a single multi-platform image, so the per-architecture
+# tags and the manifest lists that stitched them together are no longer needed.
+dockers_v2:
+  - id: repopsy
+    images:
+      - "ghcr.io/andpalmier/repopsy"
+    tags:
+      - "{{ .Version }}"
+      # Never move "latest" onto a prerelease. An empty tag is ignored.
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
     dockerfile: Dockerfile
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Git repository forensic expander"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/andpalmier/repopsy"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
-
-  - image_templates:
-      - "ghcr.io/andpalmier/repopsy:{{ .Version }}-arm64"
-      - "ghcr.io/andpalmier/repopsy:latest-arm64"
-    use: buildx
-    goos: linux
-    goarch: arm64
-    extra_files:
-      - go.mod
-      - go.sum
-      - main.go
-      - internal
-      - cmd
-    dockerfile: Dockerfile
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=Git repository forensic expander"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.source=https://github.com/andpalmier/repopsy"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
-
-docker_manifests:
-  - name_template: "ghcr.io/andpalmier/repopsy:{{ .Version }}"
-    image_templates:
-      - "ghcr.io/andpalmier/repopsy:{{ .Version }}-amd64"
-      - "ghcr.io/andpalmier/repopsy:{{ .Version }}-arm64"
-  - name_template: "ghcr.io/andpalmier/repopsy:latest"
-    image_templates:
-      - "ghcr.io/andpalmier/repopsy:latest-amd64"
-      - "ghcr.io/andpalmier/repopsy:latest-arm64"
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Forensic tool for analyzing git repository history"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.source: "https://github.com/andpalmier/repopsy"
+      org.opencontainers.image.licenses: "AGPL-3.0"
 
 release:
   github:

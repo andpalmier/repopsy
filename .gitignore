@@ -23,3 +23,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+
+# CI builds the release-layout binary here for the Docker image
+/linux/

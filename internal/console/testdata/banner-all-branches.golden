@@ -1,0 +1,11 @@
+
+┌─────────────────────────────────────────┐
+│                 repopsy                 │
+│ Repository Autopsy tool by @andpalmier  │
+└─────────────────────────────────────────┘
+
+Repository:  /repos/demo
+Branches:    all local
+Output:      /out/demo-exploded
+Workers:     8
+

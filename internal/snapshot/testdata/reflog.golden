@@ -1,0 +1,19 @@
+REF MOVEMENT LOG
+===========================
+
+Every recorded movement of every ref, newest first per ref. A reset or a
+force-push leaves the commits it replaced unreachable but still listed here, so
+this is the record of any history that was rewritten away.
+
+Reflogs are local to a repository and are NOT transferred by clone. An empty
+log below means either that no ref ever moved, or that this repository is a
+clone or a bare mirror and its history was never rewritten here.
+
+refs/heads/main
+  379ec9e1deee0b1a29ebe4a7a3394097ca70c2ad  2023-12-05T15:15:15+01:00
+  commit: replacement commit
+  by Alice Dev <alice@example.com>
+refs/heads/main
+  50c0ac245f97586eb27e74ef73f2981d942d9d4e  2023-12-05T15:14:02+01:00
+  reset: moving to HEAD~2
+  by Alice Dev <alice@example.com>

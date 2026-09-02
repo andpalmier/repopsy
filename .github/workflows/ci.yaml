@@ -43,8 +43,51 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build Docker image
-        run: docker build -t repopsy:test .
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
 
+      # The Dockerfile copies a prebuilt binary from <os>/<arch>/, which is the
+      # layout GoReleaser produces. Reproducing it here means CI builds the same
+      # image that ships, rather than a second Dockerfile that only CI sees.
+      - name: Build the binary into the release layout
+        run: |
+          mkdir -p linux/amd64
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags "-X main.version=ci-${GITHUB_SHA::7}" -o linux/amd64/repopsy .
+
+      - name: Build Docker image
+        run: DOCKER_BUILDKIT=1 docker build -t repopsy:test .
+
+      # Asserting the injected version proves the image contains the binary
+      # this job just built, rather than merely containing a working repopsy.
       - name: Test Docker image
-        run: docker run --rm repopsy:test --help
+        run: |
+          docker run --rm repopsy:test --version | tee /dev/stderr \
+            | grep -q "ci-${GITHUB_SHA::7}"
+
+      # The documented invocation: repository read-only, output mounted at /data.
+      #
+      # Uses a throwaway repository rather than this checkout, because
+      # actions/checkout leaves a detached HEAD on pull requests — no local
+      # branch, which repopsy correctly refuses.
+      - name: Test the documented invocation
+        run: |
+          git init -q -b main fixture
+          echo one > fixture/a.txt
+          git -C fixture add -A
+          git -C fixture -c user.name=ci -c user.email=ci@example.com \
+            -c commit.gpgsign=false commit -qm "fixture commit"
+          mkdir -p exploded
+          # --user is not optional: a bind mount keeps the host's ownership, so
+          # the image's own uid cannot write into a directory the runner owns.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD/fixture:/repo:ro" \
+            -v "$PWD/exploded:/data" \
+            repopsy:test /repo
+          # The output directory is named after the mount point inside the
+          # container, not the host directory: /repo -> repo-exploded.
+          test -f exploded/repo-exploded/EXTRACTION.txt
+          ls exploded/repo-exploded/refs/main/*/SHA256SUMS >/dev/null
