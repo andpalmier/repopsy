@@ -9,7 +9,19 @@ FROM alpine:3.24
 
 # git is the only runtime dependency.
 RUN apk add --no-cache git \
-    && adduser -D -u 1000 repopsy
+    && adduser -D -u 1000 repopsy \
+    # A bind-mounted repository belongs to a different uid than the container
+    # user, so git refuses it as "dubious ownership" and the documented
+    # invocation fails for every repository. This image exists only to read
+    # whatever repository is mounted into it, and it never writes to that
+    # repository, so the ownership check protects nothing here.
+    && git config --system --add safe.directory '*' \
+    # /data is the working directory, so it is where snapshots land when no -o
+    # is given. It must be writable by the container user or the simplest
+    # invocation fails, and it is meant to be bind-mounted so the output
+    # survives the container.
+    && mkdir -p /data \
+    && chown repopsy:repopsy /data
 
 ARG TARGETPLATFORM
 COPY $TARGETPLATFORM/repopsy /usr/local/bin/repopsy

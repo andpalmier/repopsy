@@ -71,8 +71,20 @@ sudo mv repopsy /usr/local/bin/
 
 ```bash
 docker pull ghcr.io/andpalmier/repopsy:latest
-docker run --rm -v "$(pwd):/repo" ghcr.io/andpalmier/repopsy:latest /repo
+
+docker run --rm \
+  -v "$(pwd):/repo:ro" \
+  -v "$(pwd)/exploded:/data" \
+  ghcr.io/andpalmier/repopsy:latest /repo
 ```
+
+Two mounts, both needed. The repository goes in read-only, because repopsy never
+writes to the repository it examines. The second mount is the output: `/data` is
+the image's working directory, so it is where snapshots land when no `-o` is
+given — without it they are written inside the container and lost when it exits.
+
+The image is OCI-standard and the same commands work with any compatible
+runtime, including Apple's `container` on macOS.
 
 ### From Source
 

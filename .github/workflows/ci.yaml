@@ -54,10 +54,34 @@ jobs:
       - name: Build the binary into the release layout
         run: |
           mkdir -p linux/amd64
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o linux/amd64/repopsy .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags "-X main.version=ci-${GITHUB_SHA::7}" -o linux/amd64/repopsy .
 
       - name: Build Docker image
         run: DOCKER_BUILDKIT=1 docker build -t repopsy:test .
 
+      # Asserting the injected version proves the image contains the binary
+      # this job just built, rather than merely containing a working repopsy.
       - name: Test Docker image
-        run: docker run --rm repopsy:test --version
+        run: |
+          docker run --rm repopsy:test --version | tee /dev/stderr \
+            | grep -q "ci-${GITHUB_SHA::7}"
+
+      # The documented invocation: repository read-only, output mounted at /data.
+      #
+      # Uses a throwaway repository rather than this checkout, because
+      # actions/checkout leaves a detached HEAD on pull requests — no local
+      # branch, which repopsy correctly refuses.
+      - name: Test the documented invocation
+        run: |
+          git init -q -b main fixture
+          echo one > fixture/a.txt
+          git -C fixture add -A
+          git -C fixture -c user.name=ci -c user.email=ci@example.com \
+            -c commit.gpgsign=false commit -qm "fixture commit"
+          mkdir -p exploded
+          docker run --rm -v "$PWD/fixture:/repo:ro" -v "$PWD/exploded:/data" repopsy:test /repo
+          # The output directory is named after the mount point inside the
+          # container, not the host directory: /repo -> repo-exploded.
+          test -f exploded/repo-exploded/EXTRACTION.txt
+          ls exploded/repo-exploded/refs/main/*/SHA256SUMS >/dev/null

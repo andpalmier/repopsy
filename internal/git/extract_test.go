@@ -313,3 +313,22 @@ func TestListBranchesCancelledContext(t *testing.T) {
 		t.Error("expected an error from a cancelled context")
 	}
 }
+
+// TestOpenReportsGitsOwnDiagnosis covers a misleading error. resolveRoot used
+// to answer every failure with "not a git repository", which sends the reader
+// to check the path even when git refused for an unrelated reason — the
+// dubious-ownership refusal on a bind-mounted repository being the case that
+// found this.
+func TestOpenReportsGitsOwnDiagnosis(t *testing.T) {
+	_, err := Open(t.TempDir())
+	if err == nil {
+		t.Fatal("expected an error for a directory holding no repository")
+	}
+	// git's own words must reach the caller.
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Errorf("error does not carry git's diagnosis: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error should still identify the cause: %v", err)
+	}
+}

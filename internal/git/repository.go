@@ -61,7 +61,8 @@ func Open(path string) (*Repository, error) {
 // resolveRoot finds the root repopsy should treat dir as naming. git resolves
 // symlinks along the way, so the result is canonical.
 func resolveRoot(dir string) (string, error) {
-	if top, err := gitOutput(context.Background(), dir, "rev-parse", "--show-toplevel"); err == nil && top != "" {
+	top, topErr := gitOutput(context.Background(), dir, "rev-parse", "--show-toplevel")
+	if topErr == nil && top != "" {
 		return top, nil
 	}
 
@@ -71,6 +72,14 @@ func resolveRoot(dir string) (string, error) {
 		return dir, nil
 	}
 
+	// Report git's own diagnosis rather than assuming the path is not a
+	// repository. git distinguishes cases that matter: a directory it refuses
+	// to read is not the same as a directory holding no repository, and saying
+	// the wrong one sends the reader to check the wrong thing. Its refusal on
+	// ownership grounds inside a container is the common example.
+	if topErr != nil {
+		return "", fmt.Errorf("cannot read a git repository at %s: %w", dir, topErr)
+	}
 	return "", fmt.Errorf("not a git repository: %s", dir)
 }
 
