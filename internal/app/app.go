@@ -20,6 +20,9 @@ const (
 	// outputSuffix is appended to the repository name to name the output directory.
 	outputSuffix = "-exploded"
 
+	// outputDirPerms is the mode for the output directory.
+	outputDirPerms = 0o755
+
 	// detachedHeadDir holds commits that belong to no branch. git refuses "HEAD"
 	// as a branch name, so this cannot collide with a branch's directory.
 	detachedHeadDir = "HEAD"
@@ -126,6 +129,14 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 
 	if info, err := os.Stat(outDir); err == nil && info.IsDir() {
 		return "", fmt.Errorf("output directory already exists: %s", outDir)
+	}
+
+	// Created before any work starts. An unwritable destination is otherwise
+	// only discovered once extraction is under way, and then it surfaces once
+	// per snapshot and once per root record — many messages for one cause,
+	// after the run has already spent its time.
+	if err := os.MkdirAll(outDir, outputDirPerms); err != nil {
+		return "", fmt.Errorf("cannot create output directory %s: %w", outDir, err)
 	}
 	return outDir, nil
 }

@@ -344,3 +344,41 @@ func TestRunBranchNamesNeverDisplaceRootRecords(t *testing.T) {
 		}
 	}
 }
+
+// TestRunUnwritableOutputFailsFast covers how a CI failure once
+// presented: an unwritable output directory was only discovered once extraction
+// was under way, so one cause produced a message per snapshot and per root
+// record, after the run had already spent its time.
+func TestRunUnwritableOutputFailsFast(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+
+	repo := gittest.New(t).WithCommits(3)
+
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil { // readable, not writable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+
+	code, _, stderr := invoke(t, "-o", filepath.Join(parent, "out"), repo.Dir)
+	if code != 1 {
+		t.Fatalf("exit %d, want 1\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "cannot create output directory") {
+		t.Errorf("stderr does not name the cause: %q", stderr)
+	}
+
+	// One cause, reported once. Nothing should have been extracted first.
+	if n := strings.Count(stderr, "permission denied"); n != 1 {
+		t.Errorf("reported the same cause %d times, want 1:\n%s", n, stderr)
+	}
+	// Markers that only appear once work has begun. Chosen so they cannot occur
+	// inside a temporary path: the test name itself once matched "Extracting".
+	for _, absent := range []string{"% [", "Found ", "extractions failed", "Failed to write"} {
+		if strings.Contains(stderr, absent) {
+			t.Errorf("work started before the destination was checked (%q present):\n%s", absent, stderr)
+		}
+	}
+}

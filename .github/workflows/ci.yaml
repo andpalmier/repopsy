@@ -80,7 +80,13 @@ jobs:
           git -C fixture -c user.name=ci -c user.email=ci@example.com \
             -c commit.gpgsign=false commit -qm "fixture commit"
           mkdir -p exploded
-          docker run --rm -v "$PWD/fixture:/repo:ro" -v "$PWD/exploded:/data" repopsy:test /repo
+          # --user is not optional: a bind mount keeps the host's ownership, so
+          # the image's own uid cannot write into a directory the runner owns.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD/fixture:/repo:ro" \
+            -v "$PWD/exploded:/data" \
+            repopsy:test /repo
           # The output directory is named after the mount point inside the
           # container, not the host directory: /repo -> repo-exploded.
           test -f exploded/repo-exploded/EXTRACTION.txt
