@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/git"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files in testdata")

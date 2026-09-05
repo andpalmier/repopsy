@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andpalmier/repopsy/internal/git"
-	"github.com/andpalmier/repopsy/internal/gittest"
-	"github.com/andpalmier/repopsy/internal/snapshot"
+	"github.com/andpalmier/repopsy/v2/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/gittest"
+	"github.com/andpalmier/repopsy/v2/internal/snapshot"
 )
 
 // setupRepo builds a temporary repository with n commits, each adding one file.

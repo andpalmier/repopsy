@@ -13,7 +13,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/andpalmier/repopsy/internal/app"
+	"github.com/andpalmier/repopsy/v2/internal/app"
 )
 
 const (

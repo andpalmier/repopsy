@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andpalmier/repopsy/internal/gittest"
-	"github.com/andpalmier/repopsy/internal/snapshot"
+	"github.com/andpalmier/repopsy/v2/internal/gittest"
+	"github.com/andpalmier/repopsy/v2/internal/snapshot"
 )
 
 var testBuild = build{version: "1.2.3", commit: "abc1234", date: "2023-12-05T12:00:00Z"}

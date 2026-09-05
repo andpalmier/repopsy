@@ -10,7 +10,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/git"
 )
 
 // Report is one of the files written at the root of an exploded repository,

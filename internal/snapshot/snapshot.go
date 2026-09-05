@@ -14,7 +14,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/git"
 )
 
 const (

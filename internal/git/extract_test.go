@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andpalmier/repopsy/internal/gittest"
+	"github.com/andpalmier/repopsy/v2/internal/gittest"
 )
 
 // newRepo wraps the shared builder and adds opening it as a Repository, which

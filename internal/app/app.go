@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/andpalmier/repopsy/internal/console"
-	"github.com/andpalmier/repopsy/internal/extractor"
-	"github.com/andpalmier/repopsy/internal/git"
-	"github.com/andpalmier/repopsy/internal/snapshot"
+	"github.com/andpalmier/repopsy/v2/internal/console"
+	"github.com/andpalmier/repopsy/v2/internal/extractor"
+	"github.com/andpalmier/repopsy/v2/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/snapshot"
 )
 
 const (

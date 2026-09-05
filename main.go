@@ -5,7 +5,7 @@ package main
 import (
 	"os"
 
-	"github.com/andpalmier/repopsy/cmd"
+	"github.com/andpalmier/repopsy/v2/cmd"
 )
 
 // Build information, set at link time via -ldflags. The placeholder values are

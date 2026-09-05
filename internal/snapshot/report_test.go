@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andpalmier/repopsy/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/git"
 )
 
 func at(s string) time.Time {
