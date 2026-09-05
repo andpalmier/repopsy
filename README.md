@@ -38,8 +38,10 @@ Requires `git` 2.31 or newer. No other runtime dependency.
 ### With Homebrew
 
 ```bash
-brew install andpalmier/tap/repopsy
+brew install --cask andpalmier/tap/repopsy
 ```
+
+Homebrew casks are macOS only. On Linux, use `go install` or a pre-built binary.
 
 ### With Go
 
