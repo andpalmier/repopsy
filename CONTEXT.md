@@ -34,6 +34,16 @@ A local branch — a ref under `refs/heads/`. Remote-tracking refs and tags are 
 so "all branches" means all local branches and may well be one on a fresh clone.
 _Avoid_: ref, head
 
+**Ref**:
+Any ref selected for extraction with `--refs` or `--all-refs`, such as `refs/pull/12/head`.
+Branches are refs; refs outside `refs/heads/` are exploded under `other-refs/` by their path.
+_Avoid_: reference, pointer
+
+**Shallow boundary**:
+A commit whose parents a shallow clone cut off. git reports no parents for it, but it is not
+a root commit, and the history before it is missing rather than absent.
+_Avoid_: graft, root
+
 **Rewritten commit**:
 A commit no ref reaches any more, recovered from a reflog that still remembers it. Its
 presence is evidence that history was rewritten after it was made.
@@ -74,6 +84,11 @@ _Avoid_: metadata, log, receipt
 The part of a repository that is not versioned and so appears in no commit — its local
 configuration and its installed hooks.
 _Avoid_: settings, environment, dotfiles
+
+**Anomaly**:
+One integrity or provenance finding about a commit or the history, rendered as a single line
+with a stable kind. Anomalies never profile the people behind an identity.
+_Avoid_: warning, alert, issue
 
 **Identity**:
 One name and email pair appearing as an author or a committer. Two identities **collide** when

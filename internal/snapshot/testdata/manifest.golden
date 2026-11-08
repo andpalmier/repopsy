@@ -23,6 +23,9 @@ Repository:     /repos/demo
 Scope:          all local branches
 Workers:        8
 Commit limit:   none
+Shallow:        no
+Tree:           written, executable bits removed
+Layout:         one snapshot per ref and commit
 
 BRANCHES
 --------
@@ -33,4 +36,41 @@ stale-branch                             no commits
 RESULTS
 -------
 Snapshots:      449
+Unique commits: 420
 Failures:       0
+
+REF NAMESPACES
+--------------
+Every ref namespace in the repository, and how many of its refs were extracted.
+
+refs/heads                   3 refs,     3 extracted
+refs/pull                  240 refs,     0 extracted  (--refs 'refs/pull/*/head' adds 120)
+
+SIGNATURES
+----------
+55 of 420 commits signed, all committed by GitHub <noreply@github.com>; 0 verified here.
+
+By type:
+      55  GPG
+
+By verdict:
+      55  Cannot verify (missing key)
+
+Signed commits by committer:
+      55  GitHub <noreply@github.com>
+
+Signed commits by issuer key (claimed unless verified):
+      55  GPG key ID B5690EEEBB952194 (RSA)
+
+ANOMALIES
+---------
+multiple-roots: 2 root commits: aaaaaaa (2025-01-10), bbbbbbb (2026-03-06)
+
+Commits flagged, by kind (each COMMIT_INFO.txt says why):
+       2  multiple-roots
+
+PATH ISSUES
+-----------
+Tree entries not written where git records them, across all commits.
+
+RENAMED  .git/config  ->  .git~repopsy/config  (".git" would make the directory a git repository)  in 3 commit(s), first ccccccc

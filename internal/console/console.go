@@ -79,6 +79,13 @@ type Header struct {
 	OutputDir string
 	Workers   int
 	Limit     int // 0 means no limit
+
+	// Scope describes the refs selected with --refs or --all-refs, and is
+	// empty for the default of local branches.
+	Scope string
+
+	// DryRun means nothing will be written.
+	DryRun bool
 }
 
 // Banner prints the startup banner and the resolved configuration.
@@ -97,12 +104,18 @@ func (c *Console) Banner(h Header) {
 	c.printf("Repository:  %s\n", c.tint(color.FgMagenta, h.RepoPath))
 	if h.Branch != "" {
 		c.printf("Branch:      %s\n", h.Branch)
+	} else if h.Scope != "" {
+		c.printf("Refs:        %s\n", h.Scope)
 	} else {
 		// "all" used to imply every branch in the repository. Only local
 		// branches are ever listed, which on a fresh clone is usually one.
 		c.printf("Branches:    all local\n")
 	}
-	c.printf("Output:      %s\n", h.OutputDir)
+	if h.DryRun {
+		c.printf("Output:      %s (dry run: nothing is written)\n", h.OutputDir)
+	} else {
+		c.printf("Output:      %s\n", h.OutputDir)
+	}
 	c.printf("Workers:     %d\n", h.Workers)
 	if h.Limit > 0 {
 		c.printf("Limit:       %d commits\n", h.Limit)
@@ -113,6 +126,99 @@ func (c *Console) Banner(h Header) {
 // BranchesFound announces how many local branches will be exploded.
 func (c *Console) BranchesFound(n int) {
 	c.warnf("Extracting from %d local branches - this may take some time and memory!\n", n)
+}
+
+// RefsFound announces how many refs matched --refs or --all-refs.
+func (c *Console) RefsFound(n int) {
+	c.warnf("Extracting from %d refs - this may take some time and memory!\n", n)
+}
+
+// ShallowRepository warns that the history is truncated. A shallow clone does
+// not look different from a full one, and it makes boundary commits read as
+// roots and related refs read as unrelated.
+func (c *Console) ShallowRepository(boundaries int) {
+	c.warnf("Shallow clone: history is cut off at %d boundary commit(s). Commits there", boundaries)
+	c.println("  look like roots and refs can look unrelated. Run \"git fetch --unshallow\"")
+	c.println("  in the source for the full history. EXTRACTION.txt lists the boundary.")
+	c.println("")
+}
+
+// PullRefsNotExtracted points out pull request refs a GitHub mirror carries,
+// which is where third-party code lives, when they are not being extracted.
+func (c *Console) PullRefsNotExtracted(n int) {
+	c.warnf("%d pull request ref(s) under refs/pull/ are not extracted. Add", n)
+	c.println("  --refs 'refs/pull/*/head' to include them.")
+	c.println("")
+}
+
+// RefSkipped reports a ref with no history to extract.
+func (c *Console) RefSkipped(name, why string) {
+	c.printf("  %s: skipped, %s\n", name, why)
+}
+
+// DistinctCommits reports how many distinct commits the refs reach between
+// them, which is what --dedupe stores.
+func (c *Console) DistinctCommits(n int) {
+	c.printf("%d distinct commits in total\n\n", n)
+}
+
+// DryRunRef is one ref's line in a dry run.
+type DryRunRef struct {
+	Name    string
+	Commits int
+	Skipped string
+}
+
+// DryRun is everything a dry run reports.
+type DryRun struct {
+	Refs        []DryRunRef
+	Unique      int
+	PerRef      int   // snapshots in the default layout
+	Bytes       int64 // tree content in the default layout
+	DedupeBytes int64 // tree content with each commit stored once
+	NoTree      bool
+	Truncated   bool // a shallow clone, so the counts are a lower bound
+}
+
+// DryRunReport prints what an explosion would produce.
+func (c *Console) DryRunReport(d DryRun) {
+	c.println("")
+	c.println("Dry run - nothing was written.")
+	c.println("")
+	for _, r := range d.Refs {
+		if r.Skipped != "" {
+			c.printf("  %-40s %s\n", r.Name, r.Skipped)
+		} else {
+			c.printf("  %-40s %d commits\n", r.Name, r.Commits)
+		}
+	}
+	c.println("")
+	c.printf("Snapshots:          %d (one per ref and commit)\n", d.PerRef)
+	c.printf("Distinct commits:   %d (what --dedupe stores)\n", d.Unique)
+	if d.NoTree {
+		c.println("Tree content:       none (--no-tree)")
+	} else {
+		c.printf("Tree content:       %s one snapshot per ref and commit\n", humanBytes(d.Bytes))
+		c.printf("                    %s with --dedupe\n", humanBytes(d.DedupeBytes))
+		c.println("                    (file content only, before filesystem overhead)")
+	}
+	if d.Truncated {
+		c.warnf("Shallow clone: these are the counts for the truncated history only.")
+	}
+}
+
+// humanBytes renders a byte count in binary units.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // BranchStarted announces the branch about to be exploded.

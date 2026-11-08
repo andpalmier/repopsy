@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 	outDir := filepath.Join(t.TempDir(), "out")
 	var progressOut strings.Builder
 
-	ext := New(repo, Config{OutputDir: outDir, Workers: 3, Writer: &progressOut})
+	ext := New(repo, Config{Dir: outDir, Workers: 3, Writer: &progressOut})
 	results, err := ext.Run(context.Background(), commits)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -58,7 +59,7 @@ func TestRunProducesOneSnapshotPerCommit(t *testing.T) {
 		if r.Commit.Hash != commits[i].Hash {
 			t.Errorf("result %d is commit %s, want %s", i, r.Commit.ShortHash, commits[i].ShortHash)
 		}
-		if want := snapshot.Path(outDir, "", commits[i]); r.OutputPath != want {
+		if want := snapshot.SnapshotIn(outDir, commits[i]); r.OutputPath != want {
 			t.Errorf("result %d path = %q, want %q", i, r.OutputPath, want)
 		}
 
@@ -108,7 +109,7 @@ func TestRunNestsUnderBranch(t *testing.T) {
 	commits := listed.Commits
 
 	outDir := filepath.Join(t.TempDir(), "out")
-	ext := New(repo, Config{OutputDir: outDir, Branch: "feat/x", Workers: 1, Writer: &strings.Builder{}})
+	ext := New(repo, Config{Dir: snapshot.RefDir(outDir, "refs/heads/feat/x"), Workers: 1, Writer: &strings.Builder{}})
 	results, err := ext.Run(context.Background(), commits)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -125,7 +126,7 @@ func TestRunNestsUnderBranch(t *testing.T) {
 
 func TestRunWithNoCommits(t *testing.T) {
 	repo := setupRepo(t, 1)
-	ext := New(repo, Config{OutputDir: t.TempDir(), Writer: &strings.Builder{}})
+	ext := New(repo, Config{Dir: t.TempDir(), Writer: &strings.Builder{}})
 
 	results, err := ext.Run(context.Background(), nil)
 	if err != nil {
@@ -150,8 +151,11 @@ func TestRunCancelledContextDispatchesNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	ext := New(repo, Config{OutputDir: filepath.Join(t.TempDir(), "out"), Workers: 2, Writer: &strings.Builder{}})
-	results, _ := ext.Run(ctx, commits)
+	ext := New(repo, Config{Dir: filepath.Join(t.TempDir(), "out"), Workers: 2, Writer: &strings.Builder{}})
+	results, err := ext.Run(ctx, commits)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
 
 	for i, r := range results {
 		if r.Commit.Hash == "" {
@@ -179,7 +183,7 @@ func TestRunChecksumsMatchTheExtractedFiles(t *testing.T) {
 	commits := listed.Commits
 
 	outDir := filepath.Join(t.TempDir(), "out")
-	ext := New(repo, Config{OutputDir: outDir, Workers: 2, Writer: &strings.Builder{}})
+	ext := New(repo, Config{Dir: outDir, Workers: 2, Writer: &strings.Builder{}})
 	results, err := ext.Run(context.Background(), commits)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

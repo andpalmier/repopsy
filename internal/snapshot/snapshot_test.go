@@ -39,6 +39,11 @@ func sampleCommit() git.Commit {
 			Key:         "ABCD1234EF567890",
 			Fingerprint: "FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444",
 			Trust:       "ultimate",
+
+			Type:              git.SigGPG,
+			IssuerKeyID:       "ABCD1234EF567890",
+			IssuerFingerprint: "FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444",
+			Algorithm:         "RSA",
 		},
 		Files: []git.FileChange{
 			{Path: "go.mod", Status: "M", OldMode: "100644", NewMode: "100644",
@@ -120,9 +125,81 @@ func TestWriteMetadataVariants(t *testing.T) {
 			want: []string{"Files Changed:  0", "Insertions:     +0", "Deletions:      -0"},
 		},
 		{
-			name:   "unsigned commit renders prose, not the raw code",
-			mutate: func(c *git.Commit) { c.Signature.Status = "" },
-			want:   []string{"GPG Signature:  Not signed"},
+			name:    "unsigned commit renders prose, not the raw code",
+			mutate:  func(c *git.Commit) { c.Signature = git.Signature{} },
+			want:    []string{"GPG Signature:  Not signed"},
+			notWant: []string{"Signature Type:", "Verified:"},
+		},
+		{
+			// git says "N" here, exactly as for an unsigned commit.
+			name: "SSH signature without an allowed signers file is reported, unverified",
+			mutate: func(c *git.Commit) {
+				c.Signature = git.Signature{Status: "N", Type: git.SigSSH, NoAllowedSigners: true,
+					IssuerFingerprint: "SHA256:abc", Algorithm: "ssh-ed25519"}
+			},
+			want: []string{
+				"GPG Signature:  SSH signature present, not verified (no allowed signers file)",
+				"Signature Type: SSH",
+				"Issuer:         fingerprint SHA256:abc (ssh-ed25519)",
+				"Verified:       no - no allowed signers file",
+			},
+			notWant: []string{"Not signed"},
+		},
+		{
+			name: "SSH signature checked only against its own key is not verified",
+			mutate: func(c *git.Commit) {
+				c.Signature = git.Signature{Status: "U", Type: git.SigSSH, IssuerFingerprint: "SHA256:abc"}
+			},
+			want: []string{"key not in the allowed signers file", "Verified:       no - the key is not in the allowed signers file"},
+		},
+		{
+			name: "GitHub web-flow signature reports the issuer without the key",
+			mutate: func(c *git.Commit) {
+				c.Signature = git.Signature{Status: "E", Key: "4AEE18F83AFDEB23", Type: git.SigGPG,
+					IssuerKeyID: "4AEE18F83AFDEB23", Algorithm: "RSA"}
+			},
+			want: []string{
+				"GPG Signature:  Cannot verify (missing key)",
+				"Signer:         (not reported)",
+				"Issuer:         key ID 4AEE18F83AFDEB23 (RSA)",
+				"Verified:       no - the signing key is not available here; the issuer is only claimed",
+			},
+		},
+		{
+			name: "tree modes and path issues are listed",
+			mutate: func(c *git.Commit) {
+				c.Tree = git.TreeReport{
+					Special: []git.SpecialEntry{
+						{Path: "start.sh", Mode: "100755", Written: "file without the executable bit"},
+						{Path: "evil", Mode: "120000", Target: "/etc/passwd", Written: "plain file holding the target, because the target is absolute"},
+					},
+					Issues: []git.PathIssue{
+						{Path: ".git/config", WrittenAs: ".git~repopsy/config", Reason: "x"},
+						{Path: "../up", Reason: "y"},
+					},
+					Filtered: 3,
+				}
+			},
+			want: []string{
+				"TREE\n----",
+				"3 entries left out: they match no --paths pattern.",
+				"100755  start.sh  (file without the executable bit)",
+				"120000  evil -> /etc/passwd  (plain file holding the target, because the target is absolute)",
+				"RENAMED  .git/config  ->  .git~repopsy/config  (x)",
+				"SKIPPED  ../up  (y)",
+			},
+		},
+		{
+			name: "anomalies are one line each",
+			mutate: func(c *git.Commit) {
+				c.Anomalies = []git.Anomaly{{Kind: "date-skew", Detail: "committed 40 days after it was authored"}}
+			},
+			want: []string{"ANOMALIES\n---------\ndate-skew                  committed 40 days after it was authored\n"},
+		},
+		{
+			name:    "an ordinary commit has no tree or anomaly section",
+			mutate:  func(c *git.Commit) {},
+			notWant: []string{"TREE\n", "ANOMALIES"},
 		},
 		{
 			name:   "bad signature is surfaced",
@@ -171,6 +248,14 @@ func TestWriteMetadataVariants(t *testing.T) {
 	}
 }
 
+func testSnapshotPath(outDir, branch string, c git.Commit) string {
+	ref := ""
+	if branch != "" {
+		ref = "refs/heads/" + branch
+	}
+	return SnapshotIn(RefDir(outDir, ref), c)
+}
+
 func TestPath(t *testing.T) {
 	c := sampleCommit() // AuthorDate 1701786622 UTC, ShortHash 8f6a2b1
 	const snap = "20231205_143022_8f6a2b1"
@@ -215,8 +300,8 @@ func TestPath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Path(tc.outDir, tc.branch, c); got != tc.want {
-				t.Errorf("Path(%q, %q) = %q, want %q", tc.outDir, tc.branch, got, tc.want)
+			if got := testSnapshotPath(tc.outDir, tc.branch, c); got != tc.want {
+				t.Errorf("testSnapshotPath(%q, %q) = %q, want %q", tc.outDir, tc.branch, got, tc.want)
 			}
 		})
 	}
@@ -228,8 +313,8 @@ func TestPath(t *testing.T) {
 func TestPathDistinguishesSlashAndUnderscoreBranches(t *testing.T) {
 	c := sampleCommit()
 
-	slashed := Path("/out", "feat/x", c)
-	underscored := Path("/out", "feat_x", c)
+	slashed := testSnapshotPath("/out", "feat/x", c)
+	underscored := testSnapshotPath("/out", "feat_x", c)
 
 	if slashed == underscored {
 		t.Fatalf("feat/x and feat_x both map to %q", slashed)
@@ -245,7 +330,7 @@ func TestPathDistinguishesSlashAndUnderscoreBranches(t *testing.T) {
 // TestPathUsesNativeSeparators guards against embedding a literal "/" in a
 // single path component, which would produce mixed separators on Windows.
 func TestPathUsesNativeSeparators(t *testing.T) {
-	got := Path("out", "feat/x", sampleCommit())
+	got := testSnapshotPath("out", "feat/x", sampleCommit())
 	for _, part := range strings.Split(got, string(filepath.Separator)) {
 		if strings.ContainsAny(part, `/\`) {
 			t.Errorf("path component %q contains a separator; full path %q", part, got)
@@ -346,7 +431,7 @@ func TestPathKeepsRefNamesOutOfTheRootNamespace(t *testing.T) {
 	c := sampleCommit()
 
 	for _, ref := range []string{"EXTRACTION.txt", "REFLOG.txt", "TAGS.txt", "IDENTITIES.txt", "REPOSITORY.txt"} {
-		got := Path("/out", ref, c)
+		got := testSnapshotPath("/out", ref, c)
 		if want := filepath.Join("/out", RefsDir, ref, "20231205_143022_8f6a2b1"); got != want {
 			t.Errorf("Path for ref %q = %q, want %q", ref, got, want)
 		}
@@ -361,7 +446,7 @@ func TestPathKeepsRefNamesOutOfTheRootNamespace(t *testing.T) {
 // may contain a file called COMMIT_INFO.txt, which would otherwise be
 // overwritten by the snapshot's own record.
 func TestTreePathSeparatesContentFromRecords(t *testing.T) {
-	snap := Path("/out", "main", sampleCommit())
+	snap := testSnapshotPath("/out", "main", sampleCommit())
 	tree := TreePath(snap)
 
 	if tree != filepath.Join(snap, TreeDir) {

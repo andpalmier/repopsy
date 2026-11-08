@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -41,6 +42,16 @@ const (
 	// and its directory would otherwise displace the manifest.
 	RefsDir = "refs"
 
+	// OtherRefsDir holds refs outside refs/heads/, such as refs/pull/1/head,
+	// at their full path below refs/. They cannot share RefsDir with branches,
+	// which sit there by short name: a branch called "pull/1/head" would
+	// collide with the pull request ref.
+	OtherRefsDir = "other-refs"
+
+	// CommitsDir holds each distinct commit once when snapshots are
+	// deduplicated, with per-ref directories linking to it.
+	CommitsDir = "commits"
+
 	// timestampFormat names a snapshot directory: 20231205_143022_abc1234.
 	timestampFormat = "20060102_150405"
 
@@ -48,38 +59,44 @@ const (
 	dateFormat = "2006-01-02T15:04:05Z07:00"
 )
 
-// Path returns the directory a commit's snapshot is written to.
-//
-// A branch name maps to nested directories mirroring its ref path, so "feat/x"
-// nests under "feat". Git refuses to create refs/heads/main/x while
-// refs/heads/main exists, so this inherits git's own guarantee that no two
-// branches can claim the same directory, and no escaping scheme is needed. An
-// empty branch puts snapshots directly under outDir.
-//
-// Branch-derived directories live under RefsDir so that no ref name can collide
-// with a root record's filename.
-//
-// The timestamp is rendered in the offset the commit itself records, never the
-// offset of the machine running repopsy, so the same repository always explodes
-// into the same directory names.
-//
-// Known limitation: ref names that are legal in git but illegal as Windows
-// path components — reserved device names such as "aux" and "CON", and the
-// characters < > " | — still produce unusable directories on Windows. This
-// predates the nesting scheme; see docs/adr/0001.
-func Path(outDir, branch string, c git.Commit) string {
-	parts := make([]string, 0, 5)
-	parts = append(parts, outDir)
+// branchDir is the directory a branch's snapshots go in. See RefDir.
+func branchDir(outDir, branch string) string {
+	if branch == "" {
+		return outDir
+	}
+	return nestedDir(outDir, RefsDir, branch)
+}
 
-	if branch != "" {
-		parts = append(parts, RefsDir)
-		for _, segment := range strings.Split(branch, "/") {
-			if segment != "" {
-				parts = append(parts, segment)
-			}
+// nestedDir nests a slash-separated name under outDir/top, one directory per
+// segment.
+func nestedDir(outDir, top, name string) string {
+	parts := []string{outDir, top}
+	for _, segment := range strings.Split(name, "/") {
+		if segment != "" {
+			parts = append(parts, segment)
 		}
 	}
-	return filepath.Join(append(parts, dirName(c))...)
+	return filepath.Join(parts...)
+}
+
+// RefDir returns the directory a ref's snapshots go in. A branch, given by
+// its full name refs/heads/<name>, nests under RefsDir by its short name, as it
+// always has; any other ref nests under OtherRefsDir by its path below refs/.
+// HEAD, for detached-head work, is RefsDir/HEAD. An empty ref means the flat
+// layout of a single-branch run.
+func RefDir(outDir, ref string) string {
+	if branch, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return branchDir(outDir, branch)
+	}
+	if other, ok := strings.CutPrefix(ref, "refs/"); ok {
+		return nestedDir(outDir, OtherRefsDir, other)
+	}
+	return branchDir(outDir, ref)
+}
+
+// SnapshotIn is where a commit's snapshot goes inside a ref's directory.
+func SnapshotIn(refDir string, c git.Commit) string {
+	return filepath.Join(refDir, dirName(c))
 }
 
 // TreePath is where a snapshot's extracted content goes: one level below the
@@ -118,8 +135,13 @@ func WriteChecksums(w io.Writer, digests []git.FileDigest) error {
 }
 
 var metadataTemplate = template.Must(template.New("metadata").Funcs(reportFuncs).Funcs(template.FuncMap{
-	"formatGPGStatus": formatGPGStatus,
+	"formatSignature": FormatSignature,
+	"verifiedLine":    verifiedLine,
 	"fileLine":        fileLine,
+	"specialLine":     specialLine,
+	"issueLine":       issueLine,
+	"anomalyLine":     anomalyLine,
+	"pathText":        pathText,
 }).Parse(metadataTemplateStr))
 
 const metadataTemplateStr = `COMMIT INFORMATION
@@ -149,21 +171,28 @@ NOTE: Author and Committer are different.
 {{end}}{{if .Unreachable}}
 NOTE: no branch reaches this commit. It was recovered from the reflog, so
 history was rewritten after it was made.
+{{end}}{{if .ShallowBoundary}}
+NOTE: this commit is a shallow boundary. The clone it was exploded from cut off
+its parents, so it is not a root commit and the history before it is missing.
 {{end}}{{if .Backdated}}
 ANOMALY: the author date is later than the committer date. This does not
 occur in normal use and indicates a rewritten or forged date.
 {{end}}
 VERIFICATION
 ------------
-GPG Signature:  {{.Signature.Status | formatGPGStatus}}
+GPG Signature:  {{formatSignature .Signature}}
 {{if .Signature.Signed}}Signer:         {{with .Signature.Signer}}{{.}}{{else}}(not reported){{end}}
 Key:            {{with .Signature.Key}}{{.}}{{else}}(not reported){{end}}
 Fingerprint:    {{with .Signature.Fingerprint}}{{.}}{{else}}(not reported){{end}}
 Trust:          {{with .Signature.Trust}}{{.}}{{else}}(not reported){{end}}
+Signature Type: {{with .Signature.Type}}{{.}}{{else}}(not read){{end}}
+Issuer:         {{with .Signature.Describe}}{{.}}{{else}}(not stated in the signature){{end}}
+Claimed Signer: {{with .Signature.ClaimedSigner}}{{.}}{{else}}(not stated in the signature){{end}}
+Verified:       {{verifiedLine .Signature}}
 {{end}}
 LINEAGE
 -------
-Parents:        {{if .ParentHashes}}{{range .ParentHashes}}{{.}} {{end}}{{else}}(root commit - no parents){{end}}
+Parents:        {{if .ParentHashes}}{{range .ParentHashes}}{{.}} {{end}}{{else if .ShallowBoundary}}(parents not present - shallow boundary){{else}}(root commit - no parents){{end}}
 
 CHANGE STATISTICS
 -----------------
@@ -183,7 +212,25 @@ SUBMODULES
 git stores only a pointer to another repository, so this snapshot does not
 contain the content below.
 
-{{range .Submodules}}{{.Path}}  ->  {{.Commit}}
+{{range .Submodules}}{{pathText .Path}}  ->  {{.Commit}}
+{{end}}{{end}}{{if or .Tree.Special .Tree.Issues .Tree.Filtered .Tree.NotWritten}}
+TREE
+----
+{{if .Tree.NotWritten}}Not written (--no-tree). SHA256SUMS lists what tree/ would contain.
+{{end}}{{if .Tree.Filtered}}{{.Tree.Filtered}} entries left out: they match no --paths pattern.
+{{end}}{{if .Tree.Special}}
+Modes the files under tree/ do not carry. This list, not the filesystem, is
+the record of each entry's mode.
+
+{{range .Tree.Special}}{{specialLine .}}
+{{end}}{{end}}{{if .Tree.Issues}}
+Paths not written where git records them:
+
+{{range .Tree.Issues}}{{issueLine .}}
+{{end}}{{end}}{{end}}{{if .Anomalies}}
+ANOMALIES
+---------
+{{range .Anomalies}}{{anomalyLine .}}
 {{end}}{{end}}
 COMMIT MESSAGE
 --------------
@@ -212,9 +259,9 @@ func fileLine(f git.FileChange) string {
 		counts = fmt.Sprintf("%-15s", "binary")
 	}
 
-	path := f.Path
+	path := pathText(f.Path)
 	if f.OldPath != "" {
-		path = f.OldPath + " -> " + f.Path
+		path = pathText(f.OldPath) + " -> " + path
 	}
 
 	// The blob hash names this file's content in the object store, so a reader
@@ -252,6 +299,73 @@ func blobRef(blob string) string {
 		return blob[:width]
 	}
 	return blob
+}
+
+// specialLine renders one entry whose mode the extracted tree does not carry.
+func specialLine(e git.SpecialEntry) string {
+	p := pathText(e.Path)
+	if e.Target != "" {
+		p += " -> " + pathText(e.Target)
+	}
+	return fmt.Sprintf("%s  %s  (%s)", e.Mode, p, e.Written)
+}
+
+// issueLine renders one entry that was skipped or written under another name.
+func issueLine(i git.PathIssue) string {
+	if i.WrittenAs == "" {
+		return fmt.Sprintf("SKIPPED  %s  (%s)", pathText(i.Path), i.Reason)
+	}
+	return fmt.Sprintf("RENAMED  %s  ->  %s  (%s)", pathText(i.Path), pathText(i.WrittenAs), i.Reason)
+}
+
+// pathText quotes names containing whitespace controls, which would otherwise
+// split a record across lines or columns.
+func pathText(p string) string {
+	if strings.ContainsAny(p, "\n\r\t") {
+		return strconv.Quote(p)
+	}
+	return p
+}
+
+// anomalyLine renders one finding as a single line: a stable kind, then why.
+func anomalyLine(a git.Anomaly) string {
+	return fmt.Sprintf("%-26s %s", a.Kind, a.Detail)
+}
+
+// FormatSignature renders the verdict on a signature. It is git's own %G?
+// verdict, except where that verdict misstates what is present: git reports
+// an SSH signature it cannot match to an allowed signer as absent ("N") or as
+// good against its own embedded key ("U").
+func FormatSignature(s git.Signature) string {
+	if s.Type == git.SigSSH && (s.Status == "N" || s.Status == "" || s.Status == "U") {
+		if s.NoAllowedSigners {
+			return "SSH signature present, not verified (no allowed signers file)"
+		}
+		return "SSH signature present, not verified (key not in the allowed signers file)"
+	}
+	if s.Type != "" && (s.Status == "N" || s.Status == "") {
+		return s.Type + " signature present, not verified"
+	}
+	return formatGPGStatus(s.Status)
+}
+
+// verifiedLine says plainly whether a signature was verified, and if not, why
+// what is known about it is only a claim.
+func verifiedLine(s git.Signature) string {
+	switch {
+	case s.Verified():
+		return "yes - " + strings.ToLower(formatGPGStatus(s.Status))
+	case s.Status == "B":
+		return "NO - the signature does not match the commit"
+	case s.Type == git.SigSSH && s.NoAllowedSigners:
+		return "no - no allowed signers file (see --allowed-signers); the issuer is only claimed"
+	case s.Type == git.SigSSH:
+		return "no - the key is not in the allowed signers file; the issuer is only claimed"
+	case s.Status == "E":
+		return "no - the signing key is not available here; the issuer is only claimed"
+	default:
+		return "no - the issuer is only claimed"
+	}
 }
 
 // formatGPGStatus renders git's %G? signature codes as prose.

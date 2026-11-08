@@ -196,6 +196,9 @@ func TestNewIdentitiesAggregates(t *testing.T) {
 	if alice.AsAuthor != 2 || alice.AsCommitter != 1 {
 		t.Errorf("alice = %d author / %d committer, want 2/1", alice.AsAuthor, alice.AsCommitter)
 	}
+	if alice.Commits != 2 {
+		t.Errorf("alice.Commits = %d, want 2 distinct commits", alice.Commits)
+	}
 	if !alice.First.Equal(at("2023-01-01T00:00:00Z")) || !alice.Last.Equal(at("2023-06-01T00:00:00Z")) {
 		t.Errorf("alice seen %v..%v", alice.First, alice.Last)
 	}
@@ -234,6 +237,10 @@ func TestIdentitiesGolden(t *testing.T) {
 			Author: "Bob Ops", AuthorEmail: "alice@example.com", AuthorDate: at("2023-02-01T09:00:00+01:00"),
 			Committer: "Alice Dev", CommitterEmail: "alice@example.com", CommitDate: at("2023-02-01T09:00:00+01:00"),
 		},
+		{
+			Author: "Carol", AuthorEmail: "7+carol@users.noreply.github.com", AuthorDate: at("2023-03-01T09:00:00+01:00"),
+			Committer: "Carol", CommitterEmail: "7+mallory@users.noreply.github.com", CommitDate: at("2023-03-01T09:00:00+01:00"),
+		},
 	}
 
 	var buf strings.Builder
@@ -269,8 +276,8 @@ func TestIdentitiesEmpty(t *testing.T) {
 	if !strings.Contains(out, "(no identities)") {
 		t.Errorf("expected an explicit empty marker:\n%s", out)
 	}
-	if strings.Count(out, "(none)") != 2 {
-		t.Errorf("both collision sections should report (none):\n%s", out)
+	if strings.Count(out, "(none)") != 4 {
+		t.Errorf("every finding section should report (none):\n%s", out)
 	}
 }
 

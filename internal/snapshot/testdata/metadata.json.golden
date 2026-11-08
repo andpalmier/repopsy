@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "hash": "8f6a2b1c4d5e6f70819243546576879a0b1c2d3e",
+  "short_hash": "8f6a2b1",
+  "tree": "21b28cfd6375d10b1cda85f50a998fdf1557404f",
+  "refs": "HEAD -> main, tag: v1.2.3",
+  "encoding": "",
+  "author": {
+    "name": "Alice Dev",
+    "email": "alice@example.com",
+    "date": "2023-12-05T14:30:22+01:00",
+    "timestamp": 1701783022
+  },
+  "committer": {
+    "name": "Bob Ops",
+    "email": "bob@example.com",
+    "date": "2023-12-05T15:00:00+01:00",
+    "timestamp": 1701784800
+  },
+  "signature": {
+    "present": true,
+    "type": "GPG",
+    "status": "G",
+    "verdict": "Valid signature (good)",
+    "verified": true,
+    "signer": "Alice Dev <alice@example.com>",
+    "key": "ABCD1234EF567890",
+    "fingerprint": "FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444",
+    "trust": "ultimate",
+    "issuer_key_id": "ABCD1234EF567890",
+    "issuer_fingerprint": "FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444",
+    "algorithm": "RSA",
+    "claimed_signer": ""
+  },
+  "parents": [
+    "7e5d1c2b"
+  ],
+  "root": false,
+  "shallow_boundary": false,
+  "unreachable": false,
+  "stats": {
+    "files_changed": 3,
+    "insertions": 5,
+    "deletions": 3
+  },
+  "files": [
+    {
+      "status": "M",
+      "path": "go.mod",
+      "old_path": "",
+      "old_mode": "100644",
+      "new_mode": "100644",
+      "old_blob": "a23b1f0",
+      "new_blob": "9817e7c",
+      "insertions": 1,
+      "deletions": 1,
+      "binary": false
+    },
+    {
+      "status": "M",
+      "path": "scripts/deploy.sh",
+      "old_path": "",
+      "old_mode": "100644",
+      "new_mode": "100755",
+      "old_blob": "aaa1111",
+      "new_blob": "bbb2222",
+      "insertions": 4,
+      "deletions": 2,
+      "binary": false
+    },
+    {
+      "status": "A",
+      "path": "demo.gif",
+      "old_path": "",
+      "old_mode": "000000",
+      "new_mode": "100644",
+      "old_blob": "0000000",
+      "new_blob": "ccc3333",
+      "insertions": 0,
+      "deletions": 0,
+      "binary": true
+    }
+  ],
+  "submodules": [],
+  "tree_report": {
+    "written": true,
+    "filtered": 0,
+    "special": [
+      {
+        "path": "scripts/deploy.sh",
+        "mode": "100755",
+        "target": "",
+        "written": "file without the executable bit"
+      }
+    ],
+    "issues": []
+  },
+  "anomalies": [
+    {
+      "kind": "date-skew",
+      "detail": "committed 40 days after it was authored"
+    }
+  ],
+  "subject": "Fix the extraction logic",
+  "message": "Fix the extraction logic\n\nLonger body here.",
+  "notes": ""
+}

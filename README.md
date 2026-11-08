@@ -8,51 +8,34 @@
 </p>
 
 <p align="center">
-  <img src="repopsy_demo.gif" alt="Repopsy Demo">
+  <img src="repopsy_demo.gif" alt="Repopsy demo">
 </p>
 
-**Repopsy** stands for **Rep**ository aut**opsy**.
+Repopsy is an OSINT tool that explodes a Git repository into one snapshot folder per commit. Each snapshot holds the commit's working tree, a forensic record, and a checksum record. At the output root it writes the reflog, tags, identities, repository state, and run provenance.
 
-**Repopsy** is an OSINT tool to gather information on a git repository, it takes a git repo and *"explodes it"*: creating a snapshot folder for every commit, enabling easy comparison, analysis, and archival of code evolution.
+Repopsy reads trees with `git ls-tree` and `git cat-file`, not `git archive`, so a repository cannot use `export-ignore` to hide files from its own snapshot. The repositories it examines are treated as untrusted: extracted trees are inert, symlinks cannot escape `tree/`, and no path can leave it.
 
-Every snapshot holds the commit's complete working tree, a forensic record of
-everything git knows about that commit, and a checksum record. At the output
-root repopsy writes the reflog, the tags, the identities seen in the history,
-the repository's unversioned state, and the provenance of the run itself.
+Requires git 2.31 or newer.
 
-Any path inside a repository names the repository itself, so `repopsy .` behaves
-the same from any subdirectory. Bare repositories work too.
+## Install
 
-repopsy reads trees directly instead of going through `git archive`. `git
-archive` honours `export-ignore`, which would let a repository withhold files
-from its own snapshot, and it also needs `tar` on the machine.
-
-You need `git` 2.31 or newer, and nothing else.
-
-## Installation
-
-### With Homebrew
+With Homebrew:
 
 ```bash
 brew install --cask andpalmier/tap/repopsy
 ```
 
-Homebrew casks are macOS only. On Linux, use `go install` or a pre-built binary.
+Homebrew casks are macOS only. On Linux, use `go install` or a prebuilt binary.
 
-### With Go
+With Go:
 
 ```bash
 go install github.com/andpalmier/repopsy/v2@latest
 ```
 
-### Pre-built binaries
+Prebuilt archives for Linux, macOS, and Windows are on the [Releases](https://github.com/andpalmier/repopsy/releases) page. Each archive is named `repopsy_<version>_<os>_<arch>`.
 
-Archives for Linux, macOS and Windows are on the
-[Releases](https://github.com/andpalmier/repopsy/releases) page. Each is named
-`repopsy_<version>_<os>_<arch>`, so pick the one matching your machine, unpack
-it and put `repopsy` somewhere on your `PATH`.
-
-### Docker
+With Docker:
 
 ```bash
 docker pull ghcr.io/andpalmier/repopsy:latest
@@ -64,20 +47,9 @@ docker run --rm \
   ghcr.io/andpalmier/repopsy:latest /repo
 ```
 
-Both mounts matter. The repository goes in read-only, since repopsy never writes
-to the repository it examines. The second mount catches the output: `/data` is
-the image's working directory, so snapshots land there when you give no `-o`.
-Skip that mount and the container writes them into itself, then loses them when
-it exits.
+The repository mount is read-only. The `/data` mount receives the output. Keep `--user` so the container can write to a directory owned by your host user.
 
-You need `--user` as well. A bind mount keeps the host's ownership, so the
-image's own user cannot write into a directory you own and the run stops at
-`permission denied`.
-
-The image follows the OCI standard, so the same commands work with any
-compatible runtime, including Apple's `container` on macOS.
-
-### From source
+From source:
 
 ```bash
 git clone https://github.com/andpalmier/repopsy.git
@@ -94,258 +66,194 @@ repopsy [flags] <repository-path>
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-o`, `--output` | Output directory | `./<repo-name>-exploded` |
-| `-w`, `--workers` | Number of parallel workers, per branch (max 32) | CPUs, capped at 32 |
-| `-n`, `--limit` | Maximum number of commits to extract | 0 (all) |
-| `-b`, `--branch` | Branch to extract from | all local branches |
-| `-v`, `--verbose` | Show detailed output per commit | false |
-| `--include-rewritten` | Also extract commits recovered from the reflog that no branch reaches | false |
-| `-h`, `--help` | Show help message | false |
+| `-w`, `--workers` | Parallel workers per branch, maximum 32 | CPUs, capped at 32 |
+| `-n`, `--limit` | Maximum commits to extract | 0 (all) |
+| `-b`, `--branch` | Branch to extract | all local branches |
+| `-v`, `--verbose` | Show one line per commit | false |
+| `--include-rewritten` | Also extract commits recovered from the reflog | false |
+| `--refs PATTERN` | Extract refs matching `PATTERN`; repeatable | `refs/heads/` |
+| `--all-refs` | Extract every ref except `refs/stash` and `refs/notes` | false |
+| `--dedupe` | Store each commit once under `commits/` and link refs to it | false |
+| `--preserve-modes` | Keep executable bits | false |
+| `--no-tree` | Write records and `SHA256SUMS`, but no `tree/` | false |
+| `--paths PATTERN` | Extract only matching paths; repeatable | everything |
+| `--dry-run` | Report commits and estimated size, write nothing | false |
+| `--json` | Also write each record as JSON | false |
+| `--allowed-signers FILE` | Verify SSH signatures against this file | your git config |
+| `--large-commit-files N` | Flag commits changing at least `N` files | 200 |
+| `--large-commit-lines N` | Flag commits adding at least `N` lines | 20000 |
+| `--date-skew DURATION` | Flag date gaps above this duration, such as `30d` or `72h`; also sets the rerooted-history threshold | `30d` |
+| `--track STRING` | Record the history of `STRING` in `STRINGS.txt`; repeatable | none |
+| `--scan-secrets` | Record masked credential-shaped strings in `SECRETS.txt` | false |
+| `-h`, `--help` | Show help | false |
 | `--version` | Show version information | false |
 
+Flags must come before the repository path. `-b` cannot be combined with `--refs`, `--all-refs`, or `--dedupe`.
+
 ```bash
-repopsy .                          # every local branch
-repopsy -n 5 /path/to/repo         # the last 5 commits
-repopsy -b main /path/to/repo      # one branch
-repopsy -w 8 -v /path/to/repo      # 8 workers, per-commit output
-repopsy --include-rewritten .      # also what the reflog remembers
+repopsy .
+repopsy -n 5 /path/to/repo
+repopsy -b main /path/to/repo
+repopsy -w 8 -v /path/to/repo
+repopsy --include-rewritten .
+
+# A GitHub mirror with pull request refs, storing each commit once.
+repopsy --refs 'refs/heads/' --refs 'refs/pull/*/head' --dedupe repo.git
+
+# Estimate a run, or write records without trees.
+repopsy --dry-run --all-refs repo.git
+repopsy --no-tree --json repo.git
+
+# Track a string through history.
+repopsy --no-tree --track 'Mozilla/5.0 (X11' repo.git
+
+# Compare identities across exploded repositories.
+repopsy identities a-exploded b-exploded
 ```
+
+### Choosing refs
+
+By default repopsy extracts local branches under `refs/heads/`. `--refs` accepts the same patterns as `git for-each-ref`: a full ref name, a prefix ending in `/`, or a glob where `*` does not cross a slash. `--all-refs` selects everything except `refs/stash` and `refs/notes`.
+
+Branches go under `refs/`. Other refs go under `other-refs/` by their path below `refs/`, so `refs/pull/12/head` becomes `other-refs/pull/12/head/`. `EXTRACTION.txt` lists every ref namespace and how many refs the run extracted. A ref that does not point at a commit is listed as skipped.
+
+### Scale
+
+Without `--dedupe`, a commit reachable from several refs is extracted once under each ref. This keeps every ref directory complete but duplicates shared history. `--dedupe` writes each distinct commit once under `commits/` and creates relative symlinks from each ref directory.
+
+`--no-tree` keeps every record and still computes `SHA256SUMS`, using a digest cache so shared blobs are hashed once. `--paths` limits `tree/` to matching files or directories; `*` crosses directories, as in Git pathspecs. `--dry-run` reports commit counts and estimated tree bytes without creating the output directory.
 
 ## Acquiring a repository
 
-How you obtain the repository decides how much of it exists to explode.
+A mirror is the best starting point because it maps every branch into `refs/heads/`:
 
 ```bash
 git clone --mirror git@example.com:acme/demo.git demo.git
 repopsy demo.git
 ```
 
-`--mirror` (and `--bare`) map every branch into `refs/heads/`, so repopsy sees
-all of them. A plain `git clone` checks out one branch and leaves the rest under
-`refs/remotes/`, where repopsy does not look, so you get one branch's snapshots
-and nothing else.
+A plain clone checks out one branch and leaves the others under `refs/remotes/`. Pass `--refs 'refs/remotes/'` to extract those. A GitHub mirror can also contain `refs/pull/*`.
 
-Two things never survive a clone, and both need the original repository. The
-first is reflogs, and with them `--include-rewritten`: a clone starts its own
-reflog, so rewritten history and abandoned detached-head work stay recoverable
-only from the repository where they happened. The second is repository state,
-meaning local configuration and installed hooks, which git does not transfer, so
-`REPOSITORY.txt` ends up describing the clone rather than the original.
+Do not use `--depth`. A shallow clone cuts history at a boundary, and repopsy will warn and record the boundary commits, but it cannot recover the missing history. Run `git fetch --unshallow` first.
 
-If either of those matters to the examination, work from a copy of the
-repository directory itself instead of a clone.
+Reflogs and repository state do not survive a clone. To recover rewritten history or record the original repository state, examine a copy of the repository directory itself.
 
 ## Output structure
 
-Each branch name becomes a directory path, and a branch containing `/` nests,
-mirroring its ref path:
-
-```
+```text
 <repo>-exploded/
-├── EXTRACTION.txt                <- provenance for the whole run
-├── REFLOG.txt                    <- every recorded ref movement
-├── TAGS.txt                      <- tags and their attestations
-├── IDENTITIES.txt                <- who appears in the history
-├── REPOSITORY.txt                <- local config and installed hooks
-└── refs/
-    ├── main/
-    │   └── 20231205_143022_abc1234/
-    │       ├── COMMIT_INFO.txt   <- the commit's record
-    │       ├── SHA256SUMS        <- the integrity record
-    │       └── tree/             <- the commit's working tree
-    ├── feature/
-    │   └── login/                <- branch "feature/login"
-    └── HEAD/                     <- only with --include-rewritten:
-                                     work abandoned on a detached head
+├── EXTRACTION.txt
+├── REFLOG.txt
+├── TAGS.txt
+├── IDENTITIES.txt
+├── REPOSITORY.txt
+├── STRINGS.txt                 # with --track
+├── SECRETS.txt                 # with --scan-secrets
+├── refs/
+│   ├── main/
+│   │   └── 20231205_143022_abc1234/
+│   │       ├── COMMIT_INFO.txt
+│   │       ├── SHA256SUMS
+│   │       └── tree/
+│   ├── feature/login/          # branch "feature/login"
+│   └── HEAD/                   # with --include-rewritten
+├── other-refs/
+│   └── pull/12/head/           # ref "refs/pull/12/head"
+└── commits/                    # with --dedupe
 ```
 
-That layout keeps two things apart on purpose. Repository content lives under
-`tree/`, and ref directories live under `refs/`, never beside the root records.
-A commit may legitimately contain a file called `COMMIT_INFO.txt`, and a branch
-may legitimately be called `EXTRACTION.txt`. Without the separation repopsy
-would overwrite the first and be displaced by the second, destroying evidence in
-one case and hiding it in the other.
+Repository content stays under `tree/`. Records stay beside it, so a file named `COMMIT_INFO.txt` in the repository cannot overwrite the record with the same name. Ref directories stay under `refs/` or `other-refs/`, so a branch named `EXTRACTION.txt` cannot replace the manifest.
 
-Naming a single branch with `-b` drops the `refs/` level, since snapshot
-directory names come from a timestamp and a hash and cannot collide with a
-record. A commit reachable from several branches is extracted under each of
-them, so every branch directory is a complete account of that branch's history.
-Nesting rather than flattening `/` to `_` keeps `feature/login` and
-`feature_login` distinct.
+With `-b`, snapshots go directly under the output directory because there is only one ref. Snapshot names use the commit's recorded date offset and short hash, so the same repository produces the same names on any host.
 
-Snapshot directory names carry the offset the commit itself records, never the
-offset of the machine running repopsy, and the short hash comes from the full
-commit hash rather than from git's `%h`, which honours `core.abbrev` in the
-examined repository. The same repository therefore always explodes into the same
-directory names, on any host.
+## Safety
+
+Extracted trees are written so that browsing them cannot run code or escape the output directory.
+
+- Files are written with mode `0644`. A file recorded as executable stays that way only with `--preserve-modes`.
+- A symlink is kept only if its target, including any chain of symlinks, stays inside `tree/`. Otherwise repopsy writes a plain file containing the target and records the reason.
+- Paths with empty, `.` or `..` components are skipped. A `.git` component is renamed to `.git~repopsy`. Case collisions are renamed on every host so output stays consistent.
+- Files are created with `O_EXCL`. repopsy never overwrites an existing tree entry.
+- Repopsy does not check out the repository, so its hooks and filters do not run. Git commands disable text conversion and external diff programs, and pin signing programs and allowed-signers settings.
+- A symlinked `.git/config` or hook is recorded by target and not followed.
+
+Every skipped or renamed path appears in `COMMIT_INFO.txt` and is summarized in `EXTRACTION.txt`.
 
 ## Root records
 
-`EXTRACTION.txt` records the provenance of the run: which repopsy build produced
-it, when it started and finished, the scope, the worker count and limit,
-per-branch commits against snapshots written, and any failures with reasons.
-
-`REFLOG.txt` records every movement of every ref: what moved, to what, when, by
-whom, and git's own description of why. A reset or force-push leaves the commits
-it replaced unreachable, so this is the record of the history that was rewritten
-away. Reflogs are local and clone does not transfer them, so this file is empty
-for a bare mirror however much was rewritten upstream. An empty log is not proof
-that nothing happened.
-
-`TAGS.txt` lists every tag with its target. An annotated tag also carries its
-own tagger identity, date and signature, an attestation separate from the commit
-it points at.
-
-`IDENTITIES.txt` lists every distinct name and email pair, with per-role counts
-and first and last seen, plus collisions: one email under several names, or one
-name under several emails. Neither collision is visible commit by commit, and
-that is how both impersonation and a reconfigured client look.
-
-`REPOSITORY.txt` holds the repository's local configuration verbatim and its
-installed hooks, with each hook's size, SHA-256, executable bit and content. Git
-versions neither, so no commit contains them, and a malicious hook is a real
-attack that never shows up in any history walk.
+- `EXTRACTION.txt` records the build, start and finish times, scope, worker count, limit, shallow state, ref counts, failures, namespaces, signatures, anomalies, and path issues.
+- `REFLOG.txt` records ref movements, including rewritten history when the repository still has reflogs.
+- `TAGS.txt` lists tags and any tagger identity, date, and signature on annotated tags.
+- `IDENTITIES.txt` lists name and email pairs with commit counts, first and last seen, collisions, placeholder identities, and GitHub noreply conflicts.
+- `STRINGS.txt` appears with `--track` and shows where each string first appears, every commit that changes its count, and the count at each ref tip.
+- `SECRETS.txt` appears with `--scan-secrets` and lists masked credential-shaped strings, their type, a hash prefix, and the commits and paths where they appear.
+- `REPOSITORY.txt` records local configuration and installed hooks. Git does not version either one.
 
 ## Integrity
 
-Every snapshot contains `SHA256SUMS`, listing the SHA-256 of each extracted file
-in the format `sha256sum -c` reads. Paths are relative to the snapshot
-directory, where the record itself lives, so verification runs from there with
-no extra flags:
+Each snapshot has `SHA256SUMS` in a format `sha256sum -c` accepts. Paths are relative to the snapshot directory:
 
 ```bash
 cd <repo>-exploded/refs/main/20231205_143022_abc1234
 sha256sum -c SHA256SUMS
 ```
 
-Together with `EXTRACTION.txt` this closes the chain of custody: the manifest
-says how the snapshots were produced, and the checksums show they have not been
-altered since.
+Control characters in paths are renamed in `tree/`, and the original-to-written mapping is recorded so the checksum file stays valid.
 
 ## Forensic record
 
-Each snapshot holds a `COMMIT_INFO.txt` recording everything git knows about
-that commit.
+`COMMIT_INFO.txt` records the commit hash, short hash, tree hash, refs, author and committer dates with the offset Git recorded, and the Unix timestamp.
 
-It opens with the commit hash, the abbreviated hash and the tree hash. The tree
-hash identifies the content independently of commit metadata, so you can spot
-identical trees across rewritten or cherry-picked history. Then the refs
-pointing at the commit, when any do.
+The signature block records Git's verification verdict and the signer identity, key ID, fingerprint, and trust level. Repopsy also reads the signature itself and records the type, issuer, and any claimed signer. A `Verified:` line states whether verification ran and why not. Use `--allowed-signers FILE` to verify SSH signatures.
 
-Dates follow, in ISO 8601, carrying the UTC offset git recorded, plus the Unix
-timestamp. That offset indicates the author's locale and working hours, so
-repopsy preserves it rather than re-rendering the date in the timezone of
-whoever runs the tool.
+The file also records parent hashes, changed files with status letters, line counts, blob hashes, modes, submodule pointers, tree issues, anomalies, the subject, the full message, encoding, and notes. Change statistics compare against the first parent, including for merges.
 
-The signature block records the verification verdict *and* the signer's
-identity: declared name, key ID, fingerprint, and the trust level git assigns
-the key. If you record only the verdict, a valid signature made by an unexpected
-key looks exactly like a legitimate one. Lineage follows, listing parent hashes
-or an explicit note for a root commit.
+Anomalies flag author dates after committer dates, large date gaps, dates after a child commit, first-parent date regressions, multiple roots, rerooted history, large commits, placeholder identities, and unsigned GitHub web-flow commits. `EXTRACTION.txt` counts findings by kind.
 
-Changed files lists every path the commit touched, with its status letter (`A`
-added, `M` modified, `D` deleted, `R` renamed, `C` copied, `T` type changed),
-line counts, a blob hash, and both file modes, calling out a mode change
-explicitly: `100644 -> 100755` means a file became executable. The blob hash
-names the content in the object store, so `git cat-file -p <hash>` retrieves it
-from the original repository. For a deletion the hash is the removed content's,
-since that is the only pointer left to what the file contained.
+## JSON output
 
-Change statistics are measured against the commit's first parent, merges
-included, so changes from the other side of a merge are not counted twice. A
-gitlink records only a pointer to a commit in another repository, so submodule
-content cannot be in the snapshot; repopsy records the pointer rather than
-silently omitting the entry.
+`--json` adds JSON forms for `COMMIT_INFO`, `EXTRACTION`, `TAGS`, `IDENTITIES`, `STRINGS`, and `SECRETS`. `REFLOG` and `REPOSITORY` remain text-only. Each document has `schema_version: 1`. Field names use snake_case, lists are always present, and dates use ISO 8601 with the offset Git recorded.
 
-Anomalies come last. A commit whose author date is *later* than its committer
-date gets flagged, since that does not happen in normal use and indicates a
-rewritten or forged date. A commit recovered with `--include-rewritten` is
-flagged as unreachable, itself evidence that history was rewritten after it was
-made. The record closes with the subject, full message, declared encoding, and
-any git notes.
+## Identities across repositories
 
-```text
-COMMIT INFORMATION
-===========================
-
-Hash:           58bb650e3a850c51fe605f8725a7338d903a061c
-Short Hash:     58bb650
-Tree:           344892c8bb98059a9e529b0833c4b4a6e5907f66
-Refs:           origin/main, origin/HEAD, main
-
-AUTHOR (who wrote the code)
----------------------------
-Name:           Alice Dev
-Email:          alice@example.com
-Date:           2023-12-05T14:30:22+01:00
-Timestamp:      1701786622
-
-COMMITTER (who applied the commit)
-----------------------------------
-Name:           Bob Ops
-Email:          bob@example.com
-Date:           2023-12-05T15:00:00+01:00
-Timestamp:      1701788400
-
-NOTE: Author and Committer are different.
-
-VERIFICATION
-------------
-GPG Signature:  Valid signature (good)
-Signer:         Alice Dev <alice@example.com>
-Key:            ABCD1234EF567890
-Fingerprint:    FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444
-Trust:          ultimate
-
-LINEAGE
--------
-Parents:        7e5d1c2b
-
-CHANGE STATISTICS
------------------
-Files Changed:  3
-Insertions:     +5
-Deletions:      -3
-
-CHANGED FILES
--------------
-Status, line counts, the new content's blob hash, and the path.
-
-M    +1      -1      9817e7ca8f21 go.mod
-M    +4      -2      bbb2222aaa11 scripts/deploy.sh  [mode 100644 -> 100755]
-A    binary          ccc3333ddd44 demo.gif
-D    +0      -99     ddd4444eee55 old/removed.go
-
-COMMIT MESSAGE
---------------
-Subject:
-Fix the extraction logic
-
-Full Message:
-Fix the extraction logic
-
-Longer body here.
+```bash
+repopsy identities [--json] [--ignore PATTERN]... [--no-default-ignore] <exploded-dir>...
 ```
+
+This reads `IDENTITIES` records from two or more exploded repositories and reports identities that appear in more than one. Emails are compared case-insensitively. GitHub noreply addresses are normalized to `github:<handle>`.
+
+Bots are ignored by default: `*[bot]*`, `noreply@github.com`, `*dependabot*`, `github-actions*`, and `action@github.com`. `--ignore` adds patterns and `--no-default-ignore` removes the defaults. Patterns match the name, email, or GitHub handle. `*` is the only wildcard.
 
 ## Known limitations
 
-- Some ref names are legal in git but cannot be directory names on Windows:
-  reserved device names (`aux`, `CON`, `NUL`, `COM1`) and the characters `<`,
-  `>`, `"`, `|`. There such a branch's snapshots fail while the rest of the run
-  completes, and `EXTRACTION.txt` lists every failure with its reason. repopsy
-  does not sanitise the name on purpose: a snapshot directory that does not
-  match the ref it came from would misattribute evidence. Linux and macOS are
-  unaffected.
-- "All branches" means `refs/heads/`. Remote-tracking refs under `refs/remotes/`
-  are not extracted, so a plain `git clone` yields a single branch. `TAGS.txt`
-  records tags, but their targets are extracted only when a branch reaches them.
-- Reflog recovery needs the original repository, since clone does not transfer
-  reflogs. Entries also expire (`gc.reflogExpire`, 90 days by default).
-- `refs/HEAD/` is produced only when you give no `-b`, since naming one branch
-  means that branch's history.
-- Submodule content is not captured. git stores only a pointer, and
-  `COMMIT_INFO.txt` records it.
-- Stashes are reported but not extracted. `REFLOG.txt` lists every stash entry
-  with its hash and message, and `git stash show -p` retrieves the content from
-  the original repository. A stash is a three-parent merge whose tree is a
-  working state rather than a commit in any branch's history, so giving it a
-  snapshot directory would misrepresent it as one.
+- Some ref names are legal in Git but not valid Windows directory names. Those snapshots fail while the rest of the run completes, and `EXTRACTION.txt` records the failures.
+- `--dedupe` needs symlink support. On Windows, enable Developer Mode or grant the symlink privilege.
+- Two names that differ only in Unicode normalization collide on macOS. The later one is skipped and recorded.
+- The issuer of an X.509 signature is not parsed. The signature type is still recorded.
+- `--track` and `--scan-secrets` search extracted refs only.
+- Reflog recovery needs the original repository because clone does not transfer reflogs.
+- Submodule content is not captured. `COMMIT_INFO.txt` records the gitlink.
+- Stashes are reported in `REFLOG.txt` but not extracted.
+
+## Project layout
+
+- `cmd`: command line parsing, help, execution, and the identities subcommand.
+- `app`: run orchestration, planning, extraction, dry run, and reports.
+- `git`: repository access, commit parsing, refs, signatures, tracking, and tree extraction.
+- `extractor`: worker pool and per-commit snapshot writing.
+- `snapshot`: output paths, record rendering, JSON, and shared file writing.
+- `anomaly`, `identity`, `secrets`, and `console`: analysis helpers and terminal output.
+
+Design decisions are in `docs/adr/`.
+
+## Development
+
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
+```
+
+## License
+
+AGPL-3.0. See [LICENSE](LICENSE).

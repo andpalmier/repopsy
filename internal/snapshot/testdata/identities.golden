@@ -2,14 +2,23 @@ IDENTITIES
 ===========================
 
 Every distinct name and email pair in the extracted history, most active first.
-Counts are the number of commits in which the identity appeared in each role.
+Commits counts distinct commits; the role counts show how often the identity
+appeared as author or committer.
 
 Alice Dev <alice@example.com>
-  Commits:      1 as author, 2 as committer
+  Commits:      2 total (1 as author, 2 as committer)
   First seen:   2023-01-01T09:00:00+01:00
   Last seen:    2023-02-01T09:00:00+01:00
+Carol <7+carol@users.noreply.github.com>
+  Commits:      1 total (1 as author, 0 as committer)
+  First seen:   2023-03-01T09:00:00+01:00
+  Last seen:    2023-03-01T09:00:00+01:00
+Carol <7+mallory@users.noreply.github.com>
+  Commits:      1 total (0 as author, 1 as committer)
+  First seen:   2023-03-01T09:00:00+01:00
+  Last seen:    2023-03-01T09:00:00+01:00
 Bob Ops <alice@example.com>
-  Commits:      1 as author, 0 as committer
+  Commits:      1 total (1 as author, 0 as committer)
   First seen:   2023-02-01T09:00:00+01:00
   Last seen:    2023-02-01T09:00:00+01:00
 
@@ -22,4 +31,22 @@ Emails used under more than one name:
   alice@example.com used by: Alice Dev, Bob Ops
 
 Names used with more than one email:
-  (none)
+  Carol used by: 7+carol@users.noreply.github.com, 7+mallory@users.noreply.github.com
+
+PLACEHOLDER IDENTITIES
+----------------------
+Identities naming no real mailbox: a reserved or machine-local domain, or an
+empty field. That is what an unconfigured client or a deliberately anonymous
+commit looks like. Each commit using one is flagged in its COMMIT_INFO.txt.
+
+  Alice Dev <alice@example.com>: placeholder domain example.com
+  Bob Ops <alice@example.com>: placeholder domain example.com
+
+GITHUB NOREPLY CONFLICTS
+------------------------
+A noreply address <id>+<handle>@users.noreply.github.com names an account by
+its permanent ID. One ID under several handles is what a rename produces, and
+also a forged address; one handle under several IDs is not something a rename
+produces.
+
+  account ID 7 appears with handles: carol, mallory

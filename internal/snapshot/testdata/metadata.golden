@@ -29,6 +29,10 @@ Signer:         Alice Dev <alice@example.com>
 Key:            ABCD1234EF567890
 Fingerprint:    FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444
 Trust:          ultimate
+Signature Type: GPG
+Issuer:         key ID ABCD1234EF567890, fingerprint FFFF0000AAAA1111BBBB2222CCCC3333DDDD4444 (RSA)
+Claimed Signer: (not stated in the signature)
+Verified:       yes - valid signature (good)
 
 LINEAGE
 -------

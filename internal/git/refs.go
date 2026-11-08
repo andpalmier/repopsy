@@ -30,7 +30,7 @@ const reflogFormat = "%gD%x00%H%x00%gn%x00%ge%x00%gs"
 // is empty for a bare repository or a fresh clone. It is evidence only when
 // examining the original working repository.
 func (r *Repository) Reflog(ctx context.Context) ([]ReflogEntry, error) {
-	output, err := gitOutput(ctx, r.Path, "reflog", "--all", "--date=iso-strict", "--format="+reflogFormat)
+	output, err := r.output(ctx, "reflog", "--all", "--date=iso-strict", "--format="+reflogFormat)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the reflog: %w", err)
 	}
@@ -98,6 +98,9 @@ type Tag struct {
 
 	// Signed reports whether the tag object carries a signature.
 	Signed bool
+
+	// SignatureType is the kind of signature, e.g. SigGPG, when Signed.
+	SignatureType string
 }
 
 const tagFormat = "%(refname:short)%00%(objecttype)%00%(objectname)%00%(*objectname)%00" +
@@ -105,7 +108,7 @@ const tagFormat = "%(refname:short)%00%(objecttype)%00%(objectname)%00%(*objectn
 
 // Tags returns every tag in the repository, sorted by name.
 func (r *Repository) Tags(ctx context.Context) ([]Tag, error) {
-	output, err := gitOutput(ctx, r.Path, "for-each-ref", "refs/tags", "--format="+tagFormat)
+	output, err := r.output(ctx, "for-each-ref", "refs/tags", "--format="+tagFormat)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tags: %w", err)
 	}
@@ -135,6 +138,9 @@ func parseTagLine(line string) (Tag, bool) {
 		TaggerEmail: strings.Trim(f[5], "<>"),
 		Subject:     f[7],
 		Signed:      f[8] != "",
+		// Only the armor's first line survives the line split, which is all
+		// the type needs.
+		SignatureType: ParseSignature(f[8]).Type,
 	}
 
 	// A lightweight tag points straight at the commit; an annotated tag points
@@ -155,7 +161,7 @@ func parseTagLine(line string) (Tag, bool) {
 // newest first. Walking history from these recovers commits that a reset or
 // force-push made unreachable.
 func (r *Repository) ReflogTips(ctx context.Context, branch string) ([]string, error) {
-	output, err := gitOutput(ctx, r.Path, "reflog", "show", "--format=%H", branch)
+	output, err := r.output(ctx, "reflog", "show", "--format=%H", branch)
 	if err != nil {
 		// A branch with no reflog is normal, not an error.
 		return nil, nil

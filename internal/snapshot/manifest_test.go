@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/andpalmier/repopsy/v2/internal/anomaly"
+	"github.com/andpalmier/repopsy/v2/internal/git"
 )
 
 func sampleManifest() Manifest {
@@ -21,6 +24,25 @@ func sampleManifest() Manifest {
 			{Name: "main", Commits: 412, Extracted: 412},
 			{Name: "feature/login", Commits: 37, Extracted: 37},
 			{Name: "stale-branch", Skipped: "no commits"},
+		},
+		UniqueCommits: 420,
+		Namespaces: []NamespaceSummary{
+			{Name: "refs/heads", Refs: 3, Extracted: 3},
+			{Name: "refs/pull", Refs: 240, Hint: "--refs 'refs/pull/*/head' adds 120"},
+		},
+		Signatures: SignatureSummary{
+			Commits: 420, Signed: 55,
+			ByType:      []Count{{Name: "GPG", N: 55}},
+			ByVerdict:   []Count{{Name: "Cannot verify (missing key)", N: 55}},
+			ByCommitter: []Count{{Name: "GitHub <noreply@github.com>", N: 55}},
+			ByIssuer:    []Count{{Name: "GPG key ID B5690EEEBB952194 (RSA)", N: 55}},
+		},
+		Anomalies: AnomalySummary{
+			Counts:     []anomaly.KindCount{{Kind: "multiple-roots", Commits: 2}},
+			Repository: []string{"multiple-roots: 2 root commits: aaaaaaa (2025-01-10), bbbbbbb (2026-03-06)"},
+		},
+		PathIssues: []PathIssueSummary{
+			{Issue: git.PathIssue{Path: ".git/config", WrittenAs: ".git~repopsy/config", Reason: "\".git\" would make the directory a git repository"}, Commits: 3, First: "ccccccc"},
 		},
 	}
 }
@@ -145,5 +167,76 @@ func TestFailureLine(t *testing.T) {
 	// Single-branch runs have no branch label to show.
 	if got := failureLine(Failure{ShortHash: "abc1234", Reason: "boom"}); strings.HasPrefix(got, " ") {
 		t.Errorf("failureLine without a branch = %q", got)
+	}
+}
+
+func TestManifestScopeAndOptions(t *testing.T) {
+	tests := []struct {
+		mutate func(*Manifest)
+		want   []string
+	}{
+		{func(m *Manifest) { m.RefPatterns = []string{"refs/heads/", "refs/pull/*/head"} },
+			[]string{"Scope:          refs matching refs/heads/, refs/pull/*/head", "REFS\n----"}},
+		{func(m *Manifest) { m.AllRefs = true }, []string{"Scope:          all refs except refs/stash and refs/notes"}},
+		{func(m *Manifest) { m.NoTree, m.Paths = true, []string{"src"} }, []string{"Tree:           not written (--no-tree); limited to src"}},
+		{func(m *Manifest) { m.PreserveModes, m.Dedupe = true, true },
+			[]string{"executable bits kept", "Layout:         each commit once under commits/"}},
+		{func(m *Manifest) { m.Shallow = []string{"abc123"} },
+			[]string{"Shallow:        YES", "SHALLOW CLONE\n-------------", "\nabc123\n"}},
+		{func(m *Manifest) { m.AllowedSigners = "/keys/allowed" }, []string{"SSH signers:    /keys/allowed"}},
+		{func(m *Manifest) { m.Anomalies = AnomalySummary{} }, []string{"ANOMALIES\n---------\n(none)"}},
+	}
+	for _, tc := range tests {
+		m := sampleManifest()
+		tc.mutate(&m)
+		var buf strings.Builder
+		if err := m.Render(&buf); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(buf.String(), want) {
+				t.Errorf("missing %q in:\n%s", want, buf.String())
+			}
+		}
+	}
+}
+
+func TestSignatureSummary(t *testing.T) {
+	webflow := git.Commit{Committer: "GitHub", CommitterEmail: "noreply@github.com",
+		Signature: git.Signature{Status: "E", Type: git.SigGPG, IssuerKeyID: "B5690EEEBB952194"}}
+	ssh := git.Commit{Committer: "Dev", CommitterEmail: "dev@company.io",
+		Signature: git.Signature{Status: "N", Type: git.SigSSH, NoAllowedSigners: true, IssuerFingerprint: "SHA256:x"}}
+	good := git.Commit{Committer: "Dev", CommitterEmail: "dev@company.io", Signature: git.Signature{Status: "G", Type: git.SigGPG}}
+	unsigned := git.Commit{Committer: "Dev", CommitterEmail: "dev@company.io", Signature: git.Signature{Status: "N"}}
+
+	s := NewSignatureSummary([]git.Commit{webflow, webflow, unsigned})
+	if s.Headline() != "2 of 3 commits signed, all committed by GitHub <noreply@github.com>; 0 verified here." {
+		t.Errorf("Headline = %q", s.Headline())
+	}
+	s = NewSignatureSummary([]git.Commit{webflow, ssh, ssh, good})
+	if s.Signed != 4 || s.Verified != 1 {
+		t.Errorf("Signed %d Verified %d", s.Signed, s.Verified)
+	}
+	if s.ByType[0] != (Count{Name: "GPG", N: 2}) && s.ByType[0] != (Count{Name: "SSH", N: 2}) {
+		t.Errorf("ByType = %v", s.ByType)
+	}
+	if s.ByVerdict[0].Name != "SSH signature present, not verified (no allowed signers file)" {
+		t.Errorf("ByVerdict = %v", s.ByVerdict)
+	}
+	if got := NewSignatureSummary([]git.Commit{unsigned}).Headline(); got != "None of the 1 commits is signed." {
+		t.Errorf("Headline = %q", got)
+	}
+}
+
+func TestNewPathIssuesAggregates(t *testing.T) {
+	issue := git.PathIssue{Path: "README", WrittenAs: "README~repopsy-1", Reason: "r"}
+	commits := []git.Commit{
+		{ShortHash: "a", Tree: git.TreeReport{Issues: []git.PathIssue{issue}}},
+		{ShortHash: "b"},
+		{ShortHash: "c", Tree: git.TreeReport{Issues: []git.PathIssue{issue}}},
+	}
+	got := NewPathIssues(commits)
+	if len(got) != 1 || got[0].Commits != 2 || got[0].First != "a" {
+		t.Errorf("got %+v", got)
 	}
 }

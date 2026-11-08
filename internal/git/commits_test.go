@@ -27,7 +27,7 @@ func baseRec() rec {
 	}
 }
 
-func (r rec) build() string {
+func (r rec) tokens() []string {
 	fields := []string{
 		r.hash, r.tree,
 		r.an, r.ae, r.adate,
@@ -36,14 +36,31 @@ func (r rec) build() string {
 		r.parents, r.encoding, r.refs, r.notes,
 		r.subject, r.body,
 	}
-	out := strings.Join(fields, "\x00") + "\x00"
-	if len(r.raw) > 0 || len(r.numstat) > 0 {
-		out += "\n\n" + strings.Join(append(append([]string{}, r.raw...), r.numstat...), "\n") + "\n"
+	tokens := append([]string{}, fields...)
+
+	for _, line := range r.raw {
+		meta, rest, ok := strings.Cut(line, "\t")
+		if !ok {
+			tokens = append(tokens, "\n"+line)
+			continue
+		}
+		tokens = append(tokens, "\n"+meta)
+		tokens = append(tokens, strings.Split(rest, "\t")...)
 	}
-	return out
+	for _, line := range r.numstat {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) == 3 {
+			if old, new, ok := strings.Cut(parts[2], " => "); ok {
+				tokens = append(tokens, parts[0]+"\t"+parts[1]+"\t", old, new)
+				continue
+			}
+		}
+		tokens = append(tokens, line)
+	}
+	return append(tokens, "")
 }
 
-func TestParseCommitRecord(t *testing.T) {
+func TestParseCommitTokens(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutate  func(*rec)
@@ -231,12 +248,12 @@ func TestParseCommitRecord(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := baseRec()
 			tc.mutate(&r)
-			record := r.build()
+			tokens := r.tokens()
 			if tc.name == "too few fields is an error" {
-				record = strings.Join([]string{"h", "t"}, "\x00")
+				tokens = []string{"h", "t"}
 			}
 
-			got, err := parseCommitRecord(record)
+			got, _, err := parseCommitTokens(tokens, 0)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got %+v", got)
@@ -251,7 +268,7 @@ func TestParseCommitRecord(t *testing.T) {
 	}
 }
 
-func TestParseCommitRecordFileChanges(t *testing.T) {
+func TestParseCommitTokensFileChanges(t *testing.T) {
 	r := baseRec()
 	r.raw = []string{
 		":100644 100644 a23b1f0 9817e7c M\tgo.mod",
@@ -268,9 +285,9 @@ func TestParseCommitRecordFileChanges(t *testing.T) {
 		"-\t-\tdemo.gif",
 	}
 
-	c, err := parseCommitRecord(r.build())
+	c, _, err := parseCommitTokens(r.tokens(), 0)
 	if err != nil {
-		t.Fatalf("parseCommitRecord: %v", err)
+		t.Fatalf("parseCommitTokens: %v", err)
 	}
 
 	if len(c.Files) != 5 {
@@ -318,12 +335,12 @@ func TestParseCommitRecordFileChanges(t *testing.T) {
 	}
 }
 
-func TestParseCommitRecordRename(t *testing.T) {
+func TestParseCommitTokensRename(t *testing.T) {
 	r := baseRec()
 	r.raw = []string{":100644 100644 d790d64 bce10ae R100\tdocs/old.md\tdocs/new.md"}
 	r.numstat = []string{"0\t0\tdocs/old.md => docs/new.md"}
 
-	c, err := parseCommitRecord(r.build())
+	c, _, err := parseCommitTokens(r.tokens(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,9 +356,9 @@ func TestParseCommitRecordRename(t *testing.T) {
 	}
 }
 
-func TestParseCommitRecordNoChanges(t *testing.T) {
+func TestParseCommitTokensNoChanges(t *testing.T) {
 	// A merge commit whose first-parent diff is empty, or an empty commit.
-	c, err := parseCommitRecord(baseRec().build())
+	c, _, err := parseCommitTokens(baseRec().tokens(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,34 +367,17 @@ func TestParseCommitRecordNoChanges(t *testing.T) {
 	}
 }
 
-// TestParseDiffBlockNumstatOnly covers the fallback for output without raw
-// lines, so the file list survives even then.
-func TestParseDiffBlockNumstatOnly(t *testing.T) {
-	files := parseDiffBlock("\n\n3\t1\ta.go\n-\t-\tb.png\n")
-	if len(files) != 2 {
-		t.Fatalf("got %d files, want 2", len(files))
-	}
-	if files[0].Path != "a.go" || files[0].Insertions != 3 || files[0].Deletions != 1 {
-		t.Errorf("files[0] = %+v", files[0])
-	}
-	if !files[1].Binary {
-		t.Errorf("files[1] should be binary: %+v", files[1])
-	}
-}
+func TestParseCommitTokensSpacesInPath(t *testing.T) {
+	r := baseRec()
+	r.raw = []string{":100644 100644 aaa1111 bbb2222 M\tsome dir/a file with spaces.txt"}
+	r.numstat = []string{"7\t2\tsome dir/a file with spaces.txt"}
 
-func TestParseDiffBlockIgnoresGarbage(t *testing.T) {
-	files := parseDiffBlock("\n\nnot a diff line\n:short\n1\t2\tok.go\n")
-	if len(files) != 1 || files[0].Path != "ok.go" {
-		t.Errorf("got %+v, want just ok.go", files)
+	c, _, err := parseCommitTokens(r.tokens(), 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestParseNumstatLineSpacesInPath(t *testing.T) {
-	f, ok := parseNumstatLine("7\t2\tsome dir/a file with spaces.txt")
-	if !ok {
-		t.Fatal("expected the line to parse")
-	}
-	if f.Path != "some dir/a file with spaces.txt" || f.Insertions != 7 || f.Deletions != 2 {
-		t.Errorf("got %+v", f)
+	if len(c.Files) != 1 || c.Files[0].Path != "some dir/a file with spaces.txt" ||
+		c.Files[0].Insertions != 7 || c.Files[0].Deletions != 2 {
+		t.Errorf("got %+v", c.Files)
 	}
 }

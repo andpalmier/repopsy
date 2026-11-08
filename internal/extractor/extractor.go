@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 
@@ -20,13 +19,14 @@ import (
 
 // Config configures the extraction process.
 type Config struct {
-	// OutputDir is the root of the exploded repository.
-	OutputDir string
+	// Dir is the directory snapshots go in. See snapshot.RefDir.
+	Dir string
 
-	// Branch names the branch being extracted. When set, snapshots nest under
-	// directories mirroring its ref path; when empty they sit directly under
-	// OutputDir.
-	Branch string
+	// Extract controls how each tree is written.
+	Extract git.ExtractOptions
+
+	// JSON also writes each snapshot's record as COMMIT_INFO.json.
+	JSON bool
 
 	// Workers bounds how many commits are extracted at once.
 	Workers int
@@ -38,11 +38,18 @@ type Config struct {
 	Writer io.Writer
 }
 
+// dirPerms is the mode for snapshot directories.
+const dirPerms = 0o755
+
 // Result is the outcome of extracting one commit.
 type Result struct {
 	Commit     git.Commit
 	OutputPath string
 	Error      error
+
+	// Stored says the snapshot exists on disk even if a later step, such as
+	// creating a deduplicated ref link, failed.
+	Stored bool
 }
 
 // Extractor extracts many commits concurrently, bounded by a worker count.
@@ -114,6 +121,13 @@ func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, er
 			failures = append(failures, r.Error)
 		}
 	}
+	if ctx.Err() != nil {
+		if len(failures) > 0 {
+			return results, errors.Join(fmt.Errorf("%d of %d extractions failed: %w",
+				len(failures), len(commits), errors.Join(failures...)), ctx.Err())
+		}
+		return results, ctx.Err()
+	}
 	if len(failures) > 0 {
 		return results, fmt.Errorf("%d of %d extractions failed: %w",
 			len(failures), len(commits), errors.Join(failures...))
@@ -124,27 +138,35 @@ func (e *Extractor) Run(ctx context.Context, commits []git.Commit) ([]Result, er
 
 // extractOne extracts one commit and writes its snapshot's records.
 func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
-	snapshotPath := snapshot.Path(e.config.OutputDir, e.config.Branch, commit)
+	snapshotPath := snapshot.SnapshotIn(e.config.Dir, commit)
 
 	// Content goes one level below the snapshot's own records, so a file in the
 	// commit can never overwrite one of them.
 	//
 	// The commit already carries its message body and change statistics from
 	// ListCommits, so no further git calls are needed here.
-	extracted, err := e.repo.ExtractCommit(ctx, commit.Hash, snapshot.TreePath(snapshotPath))
+	extracted, err := e.repo.Extract(ctx, commit.Hash, snapshot.TreePath(snapshotPath), e.config.Extract)
 	if err == nil {
-		// Only the tree listing knows which gitlinks the commit contains.
+		// With --no-tree nothing else creates the snapshot directory.
+		err = os.MkdirAll(snapshotPath, dirPerms)
+	}
+	if err == nil {
+		// Only the tree listing knows which gitlinks the commit contains, and
+		// what extraction had to change.
 		commit.Submodules = extracted.Submodules
+		commit.Tree = extracted.Tree
 
-		if metaErr := writeSnapshotFile(snapshotPath, snapshot.MetadataFilename, func(w io.Writer) error {
-			return snapshot.WriteMetadata(w, commit)
-		}); metaErr != nil {
-			err = fmt.Errorf("extraction succeeded but metadata write failed: %w", metaErr)
+		records := []record{
+			{snapshot.MetadataFilename, func(w io.Writer) error { return snapshot.WriteMetadata(w, commit) }},
+			{snapshot.ChecksumFilename, func(w io.Writer) error { return snapshot.WriteChecksums(w, extracted.Digests) }},
 		}
-		if sumErr := writeSnapshotFile(snapshotPath, snapshot.ChecksumFilename, func(w io.Writer) error {
-			return snapshot.WriteChecksums(w, extracted.Digests)
-		}); sumErr != nil && err == nil {
-			err = fmt.Errorf("extraction succeeded but checksum write failed: %w", sumErr)
+		if e.config.JSON {
+			records = append(records, record{snapshot.MetadataJSONFilename, func(w io.Writer) error { return snapshot.WriteMetadataJSON(w, commit) }})
+		}
+		for _, r := range records {
+			if writeErr := snapshot.WriteFile(snapshotPath, r.name, r.render); writeErr != nil && err == nil {
+				err = fmt.Errorf("extraction succeeded but writing %s failed: %w", r.name, writeErr)
+			}
 		}
 	}
 
@@ -152,22 +174,12 @@ func (e *Extractor) extractOne(ctx context.Context, commit git.Commit) Result {
 		Commit:     commit,
 		OutputPath: snapshotPath,
 		Error:      err,
+		Stored:     err == nil,
 	}
 }
 
-// writeSnapshotFile creates one file inside a snapshot directory. The snapshot
-// module renders the contents; creating and closing the file is the caller's
-// job, which keeps the rendering reachable in tests without a filesystem.
-func writeSnapshotFile(snapshotPath, name string, render func(io.Writer) error) (err error) {
-	f, err := os.Create(filepath.Join(snapshotPath, name))
-	if err != nil {
-		return fmt.Errorf("failed to create %s: %w", name, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("failed to close %s: %w", name, closeErr)
-		}
-	}()
-
-	return render(f)
+// record is one file written beside a snapshot's tree.
+type record struct {
+	name   string
+	render func(io.Writer) error
 }

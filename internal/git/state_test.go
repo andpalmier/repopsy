@@ -67,6 +67,122 @@ func TestReadStateCapturesHooksAndConfig(t *testing.T) {
 	}
 }
 
+func TestReadStateDoesNotFollowSymlinkedHooksOrConfig(t *testing.T) {
+	b := newRepo(t)
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+
+	secret := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secret, []byte("TOP-SECRET-LOCAL-FILE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Join(b.Dir, ".git", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(hooks, "pre-commit")); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := b.open().ReadState()
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if len(state.Hooks) != 1 {
+		t.Fatalf("got %d hooks, want 1", len(state.Hooks))
+	}
+	hook := state.Hooks[0]
+	if hook.Symlink != secret {
+		t.Errorf("Symlink = %q, want %q", hook.Symlink, secret)
+	}
+	if hook.Content != "" || strings.Contains(hook.Content, "TOP-SECRET") {
+		t.Errorf("symlinked hook content was read: %q", hook.Content)
+	}
+
+	// A symlinked config is recorded by target, not copied through.
+	config := filepath.Join(b.Dir, ".git", "config")
+	original, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(config); err != nil {
+		t.Fatal(err)
+	}
+	configTarget := filepath.Join(t.TempDir(), "config-target")
+	if err := os.WriteFile(configTarget, append(original, []byte("\n# TOP-SECRET-CONFIG\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(configTarget, config); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = b.open().ReadState()
+	if err != nil {
+		t.Fatalf("ReadState after config symlink: %v", err)
+	}
+	if state.ConfigSymlink != configTarget {
+		t.Errorf("ConfigSymlink = %q, want %q", state.ConfigSymlink, configTarget)
+	}
+	if strings.Contains(state.Config, "TOP-SECRET") {
+		t.Errorf("symlinked config content was read: %q", state.Config)
+	}
+}
+
+func TestReadStateUsesConfiguredHooksPath(t *testing.T) {
+	b := newRepo(t)
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+
+	hooks := filepath.Join(b.Dir, "custom-hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\necho custom\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.Git("config", "core.hooksPath", hooks)
+
+	state, err := b.open().ReadState()
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if state.HooksPath != hooks {
+		t.Errorf("HooksPath = %q, want %q", state.HooksPath, hooks)
+	}
+	if len(state.Hooks) != 1 || state.Hooks[0].Name != "pre-commit" {
+		t.Fatalf("custom hooks not recorded: %+v", state.Hooks)
+	}
+	if !strings.Contains(state.Hooks[0].Content, "custom") {
+		t.Errorf("custom hook content = %q", state.Hooks[0].Content)
+	}
+}
+
+func TestReadStateDoesNotReadHooksOutsideRepository(t *testing.T) {
+	b := newRepo(t)
+	b.Write("f.txt", "x\n", 0o644)
+	b.Commit("one")
+
+	hooks := filepath.Join(t.TempDir(), "external-hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("TOP-SECRET-HOOK\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.Git("config", "core.hooksPath", hooks)
+
+	state, err := b.open().ReadState()
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if !state.HooksExternal {
+		t.Error("external hooks path was not marked")
+	}
+	if len(state.Hooks) != 0 {
+		t.Errorf("external hook content was read: %+v", state.Hooks)
+	}
+}
+
 func TestReadStateTruncatesAHugeHook(t *testing.T) {
 	b := newRepo(t)
 	b.Write("f.txt", "x\n", 0o644)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/andpalmier/repopsy/v2/internal/git"
+	"github.com/andpalmier/repopsy/v2/internal/identity"
 )
 
 // Report is one of the files written at the root of an exploded repository,
@@ -24,22 +25,28 @@ type Report interface {
 }
 
 // Write renders a report into dir, creating dir if it does not exist yet.
-func Write(dir string, r Report) (err error) {
+func Write(dir string, r Report) error {
 	if mkErr := os.MkdirAll(dir, dirPerms); mkErr != nil {
 		return fmt.Errorf("failed to create output directory: %w", mkErr)
 	}
+	return WriteFile(dir, r.Filename(), r.Render)
+}
 
-	f, err := os.Create(filepath.Join(dir, r.Filename()))
+// WriteFile renders one file into an existing directory. Write, WriteJSON, and
+// the extractor use it, so file creation and close-error handling stay in one
+// place.
+func WriteFile(dir, name string, render func(io.Writer) error) (err error) {
+	f, err := os.Create(filepath.Join(dir, name))
 	if err != nil {
-		return fmt.Errorf("failed to create %s: %w", r.Filename(), err)
+		return fmt.Errorf("failed to create %s: %w", name, err)
 	}
 	defer func() {
 		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("failed to close %s: %w", r.Filename(), closeErr)
+			err = fmt.Errorf("failed to close %s: %w", name, closeErr)
 		}
 	}()
 
-	return r.Render(f)
+	return render(f)
 }
 
 // dirPerms is the mode for directories this package creates.
@@ -133,7 +140,7 @@ signature, which is an attestation separate from the commit it points at.
   Type:         {{if .Annotated}}annotated (tag object {{.Object}}){{else}}lightweight{{end}}
 {{if .Annotated}}  Tagger:       {{or_ .Tagger "(not recorded)"}} <{{.TaggerEmail}}>
   Date:         {{.TaggerDate | formatDate}}
-  Signature:    {{if .Signed}}present{{else}}none{{end}}
+  Signature:    {{if .Signed}}present{{with .SignatureType}} ({{.}}){{end}}{{else}}none{{end}}
   Subject:      {{.Subject}}
 {{end}}{{end}}{{else}}(no tags)
 {{end}}`))
@@ -146,6 +153,10 @@ type Identity struct {
 	Name  string
 	Email string
 
+	// Commits counts distinct commits in which the identity appeared in either
+	// role. AsAuthor and AsCommitter count role appearances, so a normal commit
+	// adds one to each but only one to Commits.
+	Commits     int
 	AsAuthor    int
 	AsCommitter int
 
@@ -164,6 +175,13 @@ type Identities struct {
 	// SharedEmails and SharedNames list the colliding values.
 	SharedEmails []string
 	SharedNames  []string
+
+	// Placeholders lists identities that name no real mailbox, with why.
+	Placeholders []string
+
+	// NoreplyConflicts lists GitHub noreply addresses that disagree about
+	// which account they belong to.
+	NoreplyConflicts []string
 }
 
 // Filename implements Report.
@@ -179,13 +197,15 @@ func (i Identities) Render(w io.Writer) error {
 func NewIdentities(commits []git.Commit) Identities {
 	type key struct{ name, email string }
 	seen := map[key]*Identity{}
+	commitSeen := map[key]map[string]bool{}
 
-	record := func(name, email string, at time.Time, author bool) {
+	record := func(commit, name, email string, at time.Time, author bool) {
 		k := key{name, email}
 		id, ok := seen[k]
 		if !ok {
 			id = &Identity{Name: name, Email: email, First: at, Last: at}
 			seen[k] = id
+			commitSeen[k] = map[string]bool{}
 		}
 		if at.Before(id.First) {
 			id.First = at
@@ -198,28 +218,49 @@ func NewIdentities(commits []git.Commit) Identities {
 		} else {
 			id.AsCommitter++
 		}
+		if !commitSeen[k][commit] {
+			commitSeen[k][commit] = true
+			id.Commits++
+		}
 	}
 
-	for _, c := range commits {
-		record(c.Author, c.AuthorEmail, c.AuthorDate, true)
-		record(c.Committer, c.CommitterEmail, c.CommitDate, false)
+	for i, c := range commits {
+		commit := c.Hash
+		if commit == "" {
+			commit = fmt.Sprintf("@%d", i)
+		}
+		record(commit, c.Author, c.AuthorEmail, c.AuthorDate, true)
+		record(commit, c.Committer, c.CommitterEmail, c.CommitDate, false)
 	}
 
 	result := Identities{Identities: make([]Identity, 0, len(seen))}
 	for _, id := range seen {
 		result.Identities = append(result.Identities, *id)
 	}
-	// Most active first, then by email so the order is stable.
+	// Most active first, then by email and name so the order is stable.
 	sort.Slice(result.Identities, func(a, b int) bool {
 		x, y := result.Identities[a], result.Identities[b]
-		if n, m := x.AsAuthor+x.AsCommitter, y.AsAuthor+y.AsCommitter; n != m {
-			return n > m
+		if x.Commits != y.Commits {
+			return x.Commits > y.Commits
 		}
-		return x.Email < y.Email
+		if x.Email != y.Email {
+			return x.Email < y.Email
+		}
+		return x.Name < y.Name
 	})
 
 	result.SharedEmails = collisions(result.Identities, func(i Identity) (string, string) { return i.Email, i.Name })
 	result.SharedNames = collisions(result.Identities, func(i Identity) (string, string) { return i.Name, i.Email })
+
+	emails := make([]string, 0, len(result.Identities))
+	for _, id := range result.Identities {
+		if why := identity.Placeholder(id.Name, id.Email); why != "" {
+			result.Placeholders = append(result.Placeholders, fmt.Sprintf("%s <%s>: %s", id.Name, id.Email, why))
+		}
+		emails = append(emails, id.Email)
+	}
+	sort.Strings(result.Placeholders)
+	result.NoreplyConflicts = identity.NoreplyConflicts(emails)
 	return result
 }
 
@@ -255,10 +296,11 @@ var identitiesTemplate = template.Must(template.New("identities").Funcs(reportFu
 ===========================
 
 Every distinct name and email pair in the extracted history, most active first.
-Counts are the number of commits in which the identity appeared in each role.
+Commits counts distinct commits; the role counts show how often the identity
+appeared as author or committer.
 
 {{if .Identities}}{{range .Identities}}{{or_ .Name "(no name)"}} <{{.Email}}>
-  Commits:      {{.AsAuthor}} as author, {{.AsCommitter}} as committer
+  Commits:      {{.Commits}} total ({{.AsAuthor}} as author, {{.AsCommitter}} as committer)
   First seen:   {{.First | formatDate}}
   Last seen:    {{.Last | formatDate}}
 {{end}}{{else}}(no identities)
@@ -274,6 +316,25 @@ Emails used under more than one name:
 {{end}}
 Names used with more than one email:
 {{if .SharedNames}}{{range .SharedNames}}  {{.}}
+{{end}}{{else}}  (none)
+{{end}}
+PLACEHOLDER IDENTITIES
+----------------------
+Identities naming no real mailbox: a reserved or machine-local domain, or an
+empty field. That is what an unconfigured client or a deliberately anonymous
+commit looks like. Each commit using one is flagged in its COMMIT_INFO.txt.
+
+{{if .Placeholders}}{{range .Placeholders}}  {{.}}
+{{end}}{{else}}  (none)
+{{end}}
+GITHUB NOREPLY CONFLICTS
+------------------------
+A noreply address <id>+<handle>@users.noreply.github.com names an account by
+its permanent ID. One ID under several handles is what a rename produces, and
+also a forged address; one handle under several IDs is not something a rename
+produces.
+
+{{if .NoreplyConflicts}}{{range .NoreplyConflicts}}  {{.}}
 {{end}}{{else}}  (none)
 {{end}}`))
 
@@ -306,15 +367,19 @@ Hooks that git ships as inert *.sample files are omitted.
 
 CONFIGURATION
 -------------
-{{if .State.Config}}{{.State.Config}}{{else}}(no local configuration file)
+{{if .State.ConfigSymlink}}(config is a symlink to {{.State.ConfigSymlink}}; content not read)
+{{else if .State.Config}}{{.State.Config}}{{else}}(no local configuration file)
 {{end}}
 HOOKS
 -----
-{{if .State.Hooks}}{{range .State.Hooks}}{{.Name}}
-  Size:         {{.Size}} bytes
+{{if .State.HooksPath}}Hooks path:    {{.State.HooksPath}}
+{{end}}{{if .State.HooksExternal}}(hooks path is outside the repository; content not read)
+{{else if .State.Hooks}}{{range .State.Hooks}}{{.Name}}
+{{if .Symlink}}  Symlink:      {{.Symlink}} (content not read)
+{{else}}  Size:         {{.Size}} bytes
   SHA-256:      {{.SHA256}}
   Executable:   {{if .Executable}}yes{{else}}no - git will not run it{{end}}
   Content:{{if .Truncated}} (truncated){{end}}
 {{.Content}}
-{{end}}{{else}}(no hooks installed)
+{{end}}{{end}}{{else}}(no hooks installed)
 {{end}}`))

@@ -34,12 +34,16 @@ type ListOptions struct {
 	// Tips walks history from these commits instead of from a branch. Passed on
 	// stdin, so a long reflog cannot overflow the argument list.
 	Tips []string
+
+	// Hashes lists exactly these commits, in this order, without walking
+	// history. Passed on stdin, like Tips.
+	Hashes []string
 }
 
 const (
-	// recordSep starts each commit record. A commit message could in principle
-	// contain this control character; nothing in git forbids it, but it is
-	// vanishingly rare in practice.
+	// recordSep starts records in the other git commands that cannot use NUL
+	// because their output includes a commit message. Commit listing uses -z
+	// instead; see ListCommits.
 	recordSep = "\x1e"
 
 	// fieldSep separates the fixed fields within a record. Fields are split on
@@ -65,8 +69,7 @@ const (
 	// git recorded, and rendering them would silently substitute the offset of
 	// whatever machine runs repopsy. The recorded offset indicates the author's
 	// locale and working hours, so it is evidence and must survive.
-	logFormat = "%x1e" +
-		"%H" + "%x00" + // commit hash
+	logFormat = "%H" + "%x00" + // commit hash
 		"%T" + "%x00" + // tree hash
 		"%an" + "%x00" + // author name
 		"%ae" + "%x00" + // author email
@@ -84,7 +87,7 @@ const (
 		"%D" + "%x00" + // refs pointing at this commit
 		"%N" + "%x00" + // commit notes
 		"%s" + "%x00" + // subject
-		"%B" + "%x00" // full message
+		"%B" // full message; -z supplies the record terminator
 )
 
 // ListCommits returns the commits selected by opts, fully populated.
@@ -98,6 +101,9 @@ const (
 func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) (CommitList, error) {
 	args := []string{
 		"log",
+		// Commit messages cannot contain NUL, so -z makes the record boundary
+		// unambiguous even when a message contains control characters.
+		"-z",
 		"--format=" + logFormat,
 		// --raw carries file modes and status letters; --numstat carries the line
 		// counts. git emits the raw block first, then the numstat block, listing
@@ -111,6 +117,12 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) (CommitL
 		// zeroing their change statistics. Reports a merge against its first
 		// parent, matching what git show does. Requires git 2.31 or newer.
 		"--diff-merges=first-parent",
+		// Both would run a program the examined repository's attributes and
+		// configuration name. Neither changes --raw or --numstat for text.
+		"--no-textconv",
+		"--no-ext-diff",
+		// log.showSignature would interleave gpg's output with the records.
+		"--no-show-signature",
 	}
 
 	if opts.Limit > 0 {
@@ -119,17 +131,20 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) (CommitL
 	if opts.Reverse {
 		args = append(args, "--reverse")
 	}
+	stdin := opts.Tips
 	switch {
+	case len(opts.Hashes) > 0:
+		args = append(args, "--no-walk=unsorted", "--stdin")
+		stdin = opts.Hashes
 	case len(opts.Tips) > 0:
 		args = append(args, "--stdin")
 	case opts.Branch != "":
-		args = append(args, opts.Branch)
+		args = append(args, "--end-of-options", opts.Branch)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = r.Path
-	if len(opts.Tips) > 0 {
-		cmd.Stdin = strings.NewReader(strings.Join(opts.Tips, "\n") + "\n")
+	cmd := r.command(ctx, args...)
+	if len(stdin) > 0 {
+		cmd.Stdin = strings.NewReader(strings.Join(stdin, "\n") + "\n")
 	}
 
 	output, err := cmd.Output()
@@ -141,33 +156,58 @@ func (r *Repository) ListCommits(ctx context.Context, opts ListOptions) (CommitL
 		return CommitList{}, fmt.Errorf("git log failed: %w", err)
 	}
 
-	records := strings.Split(string(output), recordSep)
-	list := CommitList{Commits: make([]Commit, 0, len(records))}
-	for _, record := range records {
-		if strings.TrimSpace(record) == "" {
-			continue
+	tokens := strings.Split(string(output), fieldSep)
+	list := CommitList{Commits: make([]Commit, 0, len(tokens)/fieldCount)}
+	for pos := 0; pos < len(tokens); {
+		// The final NUL in -z output leaves one empty token.
+		if pos == len(tokens)-1 && tokens[pos] == "" {
+			break
 		}
-		commit, err := parseCommitRecord(record)
+		commit, next, err := parseCommitTokens(tokens, pos)
 		if err != nil {
 			// Counted rather than dropped: see CommitList.Unparsed.
 			list.Unparsed++
-			continue
+			break
 		}
+		commit.ShallowBoundary = r.IsShallowBoundary(commit.Hash)
 		list.Commits = append(list.Commits, commit)
+		pos = next
 	}
 
+	// %G? reports an SSH signature as absent when no allowed-signers file is
+	// configured, and never says which kind of signature it saw, so the raw
+	// signature is read as well.
+	if err := r.readSignatures(ctx, list.Commits); err != nil {
+		return CommitList{}, err
+	}
 	return list, nil
 }
 
-// parseCommitRecord parses one record of git log output: the fixed fields
-// emitted by logFormat, followed by that commit's diff lines.
-func parseCommitRecord(record string) (Commit, error) {
-	// One extra split so the diff block lands in its own part.
-	parts := strings.SplitN(record, fieldSep, fieldCount+1)
-	if len(parts) < fieldCount {
-		return Commit{}, fmt.Errorf("invalid commit record: %q", record)
+// parseCommitTokens reads one commit from the NUL-separated tokens emitted by
+// ListCommits, including its raw/numstat diff block. The returned position is
+// the first token of the next commit.
+func parseCommitTokens(tokens []string, pos int) (Commit, int, error) {
+	if len(tokens)-pos < fieldCount {
+		return Commit{}, len(tokens), fmt.Errorf("invalid commit record: only %d fields", len(tokens)-pos)
 	}
+	commit, err := parseCommitFields(tokens[pos : pos+fieldCount])
+	if err != nil {
+		return Commit{}, pos + fieldCount, err
+	}
+	pos += fieldCount
+	files, next, err := parseDiffTokens(tokens, pos)
+	if err != nil {
+		return Commit{}, next, err
+	}
+	commit.Files = files
+	commit.addFileTotals()
+	return commit, next, nil
+}
 
+func parseCommitFields(parts []string) (Commit, error) {
+	if len(parts) < fieldCount {
+		return Commit{}, fmt.Errorf("invalid commit record: only %d fields", len(parts))
+	}
 	authorDate, err := parseGitDate(parts[4])
 	if err != nil {
 		return Commit{}, fmt.Errorf("invalid author date: %w", err)
@@ -182,7 +222,7 @@ func parseCommitRecord(record string) (Commit, error) {
 		parents = strings.Fields(parts[13])
 	}
 
-	commit := Commit{
+	return Commit{
 		Hash:           parts[0],
 		ShortHash:      shortHash(parts[0]),
 		TreeHash:       parts[1],
@@ -205,18 +245,15 @@ func parseCommitRecord(record string) (Commit, error) {
 		Notes:        strings.TrimSpace(parts[16]),
 		Subject:      parts[17],
 		FullMessage:  strings.TrimSpace(parts[18]),
-	}
+	}, nil
+}
 
-	if len(parts) > fieldCount {
-		commit.Files = parseDiffBlock(parts[fieldCount])
-		for _, f := range commit.Files {
-			commit.FilesChanged++
-			commit.Insertions += f.Insertions
-			commit.Deletions += f.Deletions
-		}
+func (c *Commit) addFileTotals() {
+	for _, f := range c.Files {
+		c.FilesChanged++
+		c.Insertions += f.Insertions
+		c.Deletions += f.Deletions
 	}
-
-	return commit, nil
 }
 
 // shortHash abbreviates a commit hash for display and directory naming.
@@ -233,45 +270,101 @@ func parseGitDate(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-// parseDiffBlock parses the --raw lines and the --numstat lines git emits after
-// a commit's fields.
-//
-// The raw lines carry modes, blobs and a status letter; the numstat lines carry
-// line counts. Both list the same files in the same order, so the counts are
-// matched positionally — safer than matching on path, since --numstat rewrites
-// renamed paths into an "old => new" form that raw does not use.
-func parseDiffBlock(block string) []FileChange {
+// parseDiffTokens parses the raw and numstat tokens that follow a commit's
+// fields in ListCommits. Paths are their own NUL-terminated tokens, so names
+// containing tabs, newlines or non-ASCII bytes survive intact.
+func parseDiffTokens(tokens []string, pos int) ([]FileChange, int, error) {
 	var files []FileChange
-	var counts []FileChange
-
-	for line := range strings.SplitSeq(block, "\n") {
-		switch {
-		case strings.HasPrefix(line, ":"):
-			if f, ok := parseRawLine(line); ok {
-				files = append(files, f)
-			}
-		case line != "":
-			if f, ok := parseNumstatLine(line); ok {
-				counts = append(counts, f)
+	for pos < len(tokens) {
+		token := strings.TrimPrefix(tokens[pos], "\n")
+		if !strings.HasPrefix(token, ":") {
+			break
+		}
+		f, ok := parseRawMeta(token)
+		if !ok {
+			return nil, pos, fmt.Errorf("invalid raw diff entry %q", token)
+		}
+		pos++
+		if pos >= len(tokens) {
+			return nil, pos, fmt.Errorf("raw diff entry %q has no path", token)
+		}
+		if isRenameOrCopy(f.Status) {
+			f.OldPath = tokens[pos]
+			pos++
+			if pos >= len(tokens) {
+				return nil, pos, fmt.Errorf("raw rename %q has no new path", token)
 			}
 		}
-	}
-
-	// No raw lines (older git, or an unexpected shape): the counts alone still
-	// describe which files changed.
-	if len(files) == 0 {
-		return counts
+		f.Path = tokens[pos]
+		pos++
+		files = append(files, f)
 	}
 
 	for i := range files {
-		if i >= len(counts) {
-			break
+		if pos >= len(tokens) || !isNumstatToken(tokens[pos]) {
+			return nil, pos, fmt.Errorf("missing numstat entry for %s", files[i].Path)
 		}
-		files[i].Insertions = counts[i].Insertions
-		files[i].Deletions = counts[i].Deletions
-		files[i].Binary = counts[i].Binary
+		token := tokens[pos]
+		pos++
+		files[i].Insertions, files[i].Deletions, files[i].Binary = parseNumstatToken(token)
+		if isRenameOrCopy(files[i].Status) {
+			if pos+2 > len(tokens) {
+				return nil, pos, fmt.Errorf("numstat rename for %s has too few paths", files[i].Path)
+			}
+			pos += 2
+		}
 	}
-	return files
+	return files, pos, nil
+}
+
+func parseRawMeta(line string) (FileChange, bool) {
+	meta := strings.Fields(strings.TrimPrefix(line, ":"))
+	if len(meta) < 5 {
+		return FileChange{}, false
+	}
+	return FileChange{
+		OldMode: meta[0],
+		NewMode: meta[1],
+		OldBlob: meta[2],
+		NewBlob: meta[3],
+		Status:  meta[4],
+	}, true
+}
+
+func isRenameOrCopy(status string) bool {
+	return strings.HasPrefix(status, "R") || strings.HasPrefix(status, "C")
+}
+
+func isNumstatToken(token string) bool {
+	fields := strings.SplitN(token, "\t", 3)
+	if len(fields) < 3 {
+		return false
+	}
+	number := func(s string) bool {
+		if s == "-" {
+			return true
+		}
+		if s == "" {
+			return false
+		}
+		for _, c := range s {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return number(fields[0]) && number(fields[1])
+}
+
+func parseNumstatToken(token string) (insertions, deletions int, binary bool) {
+	fields := strings.SplitN(token, "\t", 3)
+	if len(fields) < 3 || fields[0] == "-" || fields[1] == "-" {
+		return 0, 0, true
+	}
+	insertions, _ = strconv.Atoi(fields[0])
+	deletions, _ = strconv.Atoi(fields[1])
+	return insertions, deletions, false
 }
 
 // parseRawLine parses one --raw entry:
@@ -295,34 +388,24 @@ func parseRawLine(line string) (FileChange, bool) {
 		OldBlob: meta[2],
 		NewBlob: meta[3],
 		Status:  meta[4],
-		Path:    fields[1],
+		Path:    unquoteGitPath(fields[1]),
 	}
 	// Renames and copies name both sides.
 	if len(fields) >= 3 {
-		f.OldPath, f.Path = fields[1], fields[2]
+		f.OldPath, f.Path = unquoteGitPath(fields[1]), unquoteGitPath(fields[2])
 	}
 	return f, true
 }
 
-// parseNumstatLine parses one --numstat entry. Binary files report "-" in place
-// of both counts.
-func parseNumstatLine(line string) (FileChange, bool) {
-	// Split on tabs rather than whitespace so filenames containing spaces do not
-	// shift the count columns.
-	fields := strings.SplitN(line, "\t", 3)
-	if len(fields) < 3 {
-		return FileChange{}, false
+// unquoteGitPath decodes the C-style quoting git uses for names containing
+// control bytes, backslashes or non-ASCII bytes when core.quotePath is on.
+func unquoteGitPath(p string) string {
+	if strings.HasPrefix(p, `"`) {
+		if unquoted, err := strconv.Unquote(p); err == nil {
+			return unquoted
+		}
 	}
-
-	f := FileChange{Path: fields[2]}
-	if fields[0] == "-" || fields[1] == "-" {
-		f.Binary = true
-		return f, true
-	}
-
-	f.Insertions, _ = strconv.Atoi(fields[0])
-	f.Deletions, _ = strconv.Atoi(fields[1])
-	return f, true
+	return p
 }
 
 // RewrittenCommits returns commits ref once pointed at that are not already

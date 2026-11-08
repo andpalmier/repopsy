@@ -1,18 +1,10 @@
 package git
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
+	"sync"
 )
 
 const (
@@ -23,6 +15,13 @@ const (
 	modeExecutable = "100755"
 	modeSymlink    = "120000"
 	modeSubmodule  = "160000"
+
+	// maxLinkDepth bounds how many symlinks resolving one target may follow,
+	// the same bound the kernel applies. A cycle counts as an escape.
+	maxLinkDepth = 40
+
+	// renameSuffix marks a path component repopsy had to rename.
+	renameSuffix = "~repopsy"
 )
 
 // Submodule is a gitlink: a pointer to a commit in another repository.
@@ -40,10 +39,15 @@ type ExtractResult struct {
 	// Submodules are the gitlinks encountered, whose content is not captured.
 	Submodules []Submodule
 
-	// Digests is the SHA-256 of every file written, in tree order. The bytes
-	// pass through this process anyway, so hashing them is nearly free — and it
-	// lets a reader prove the snapshot was not altered after extraction.
+	// Digests is the SHA-256 of every regular file in the tree, in tree order,
+	// by the path it was written to. The bytes pass through this process anyway,
+	// so hashing them is nearly free — and it lets a reader prove the snapshot
+	// was not altered after extraction. Symlinks are not listed: sha256sum
+	// would follow them and hash what they point at.
 	Digests []FileDigest
+
+	// Tree records every entry not written exactly as git records it.
+	Tree TreeReport
 }
 
 // FileDigest is one extracted file and the hash of its content.
@@ -52,14 +56,101 @@ type FileDigest struct {
 	SHA256 string
 }
 
-// treeEntry is one row of git ls-tree output.
-type treeEntry struct {
-	mode string
-	sha  string
-	path string
+// TreeReport records what extraction did with a commit's tree wherever the
+// files under tree/ differ from what git records. Without it a neutralised mode
+// or a renamed path would silently misstate the evidence.
+type TreeReport struct {
+	// Special lists every entry whose git mode a plain file does not carry:
+	// executables and symlinks. It is the authoritative record of modes.
+	Special []SpecialEntry
+
+	// Issues lists entries that were skipped or written under another name.
+	Issues []PathIssue
+
+	// Filtered counts entries left out because they matched no --paths pattern.
+	Filtered int
+
+	// NotWritten is set when no files were written at all (--no-tree).
+	NotWritten bool
 }
 
-// ExtractCommit writes a commit's complete tree into destPath.
+// SpecialEntry is one executable or symlink tree entry.
+type SpecialEntry struct {
+	Path string
+	Mode string
+
+	// Target is a symlink's target, as recorded in git.
+	Target string
+
+	// Written says how the entry appears under tree/.
+	Written string
+}
+
+// PathIssue is one tree entry that was not written at the path git records.
+type PathIssue struct {
+	Path string
+
+	// WrittenAs is where the entry was written instead, or "" if it was
+	// skipped. The content of a skipped entry is still named by its blob hash.
+	WrittenAs string
+
+	Reason string
+}
+
+// ExtractOptions controls how a commit's tree is written. The zero value is
+// the safe default.
+type ExtractOptions struct {
+	// PreserveModes writes executable files with their executable bit.
+	//
+	// Off by default: the tree comes from a repository under examination, and a
+	// script that keeps its bit is one double-click away from running. The git
+	// mode is recorded in TreeReport.Special either way.
+	PreserveModes bool
+
+	// NoTree computes the integrity record without writing any files.
+	NoTree bool
+
+	// Paths limits extraction to matching entries. Nil means everything.
+	Paths *PathFilter
+
+	// Digests caches blob digests across commits. With NoTree, a blob already
+	// in the cache is not read again, which is what makes hashing every commit
+	// affordable: most blobs are shared between commits.
+	Digests *DigestCache
+}
+
+// DigestCache maps blob hashes to the SHA-256 of their content. Safe for
+// concurrent use.
+type DigestCache struct {
+	mu   sync.Mutex
+	sums map[string]string
+}
+
+// NewDigestCache returns an empty cache.
+func NewDigestCache() *DigestCache {
+	return &DigestCache{sums: map[string]string{}}
+}
+
+func (c *DigestCache) get(blob string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sum, ok := c.sums[blob]
+	return sum, ok
+}
+
+func (c *DigestCache) put(blob, sum string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sums[blob] = sum
+}
+
+// Extract writes a commit's tree into destPath.
 //
 // The tree is read with ls-tree and cat-file rather than piped through
 // "git archive | tar", for two reasons. git archive honours export-ignore from
@@ -68,189 +159,20 @@ type treeEntry struct {
 // as pathspecs and --worktree-attributes both still respect it and there is no
 // --no-export-ignore. And it removes tar as an undeclared runtime dependency.
 // See docs/adr/0005.
-func (r *Repository) ExtractCommit(ctx context.Context, hash, destPath string) (ExtractResult, error) {
+//
+// Every decision about where an entry goes is made from the tree listing
+// before anything is written, so it is the same on every host. See planTree.
+func (r *Repository) Extract(ctx context.Context, hash, destPath string, opts ExtractOptions) (ExtractResult, error) {
 	entries, err := r.listTree(ctx, hash)
 	if err != nil {
 		return ExtractResult{}, err
 	}
 
-	if err := os.MkdirAll(destPath, dirPerms); err != nil {
-		return ExtractResult{}, fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	return r.writeTree(ctx, destPath, entries)
-}
-
-// listTree returns every blob and gitlink in a commit's tree. -z terminates
-// records with NUL, so paths containing newlines or quotes stay intact.
-func (r *Repository) listTree(ctx context.Context, hash string) ([]treeEntry, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-tree", "-r", "-z", hash)
-	cmd.Dir = r.Path
-
-	output, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return nil, fmt.Errorf("git ls-tree failed: %s", strings.TrimSpace(string(exitErr.Stderr)))
+	if !opts.NoTree {
+		if err := os.MkdirAll(destPath, dirPerms); err != nil {
+			return ExtractResult{}, fmt.Errorf("failed to create output directory: %w", err)
 		}
-		return nil, fmt.Errorf("git ls-tree failed: %w", err)
 	}
 
-	var entries []treeEntry
-	for record := range strings.SplitSeq(string(output), "\x00") {
-		// "<mode> <type> <sha>\t<path>"
-		meta, path, found := strings.Cut(record, "\t")
-		if !found {
-			continue
-		}
-		fields := strings.Fields(meta)
-		if len(fields) != 3 {
-			continue
-		}
-		entries = append(entries, treeEntry{mode: fields[0], sha: fields[2], path: path})
-	}
-	return entries, nil
-}
-
-// writeTree materialises entries under destPath, streaming their content from a
-// single cat-file process.
-func (r *Repository) writeTree(ctx context.Context, destPath string, entries []treeEntry) (result ExtractResult, err error) {
-
-	// Gitlinks have no content to fetch, so they are handled without cat-file.
-	var blobs []treeEntry
-	for _, e := range entries {
-		if e.mode == modeSubmodule {
-			result.Submodules = append(result.Submodules, Submodule{Path: e.path, Commit: e.sha})
-			continue
-		}
-		blobs = append(blobs, e)
-	}
-	if len(blobs) == 0 {
-		return result, nil
-	}
-
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "--batch")
-	cmd.Dir = r.Path
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return result, fmt.Errorf("failed to open cat-file stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return result, fmt.Errorf("failed to open cat-file stdout: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return result, fmt.Errorf("failed to start git cat-file: %w", err)
-	}
-
-	// Returning early leaves cat-file mid-write with nobody draining stdout and
-	// the request goroutine mid-write to stdin, so both block and Wait never
-	// returns. Killing the child releases them. On success stdin has been closed
-	// and all output consumed, so cat-file exits on its own and a non-zero exit
-	// is worth reporting.
-	defer func() {
-		if err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			return
-		}
-		if waitErr := cmd.Wait(); waitErr != nil {
-			err = fmt.Errorf("git cat-file failed: %w", waitErr)
-		}
-	}()
-
-	// Requests are written while responses are read, rather than in lockstep:
-	// a round trip per blob costs more than the whole extraction. cat-file
-	// answers in order, so the reader still knows which entry it is looking at.
-	// Neither pipe can deadlock because stdout is drained throughout.
-	go func() {
-		defer func() { _ = stdin.Close() }()
-		w := bufio.NewWriter(stdin)
-		for _, e := range blobs {
-			if _, err := fmt.Fprintln(w, e.sha); err != nil {
-				return
-			}
-		}
-		_ = w.Flush()
-	}()
-
-	reader := bufio.NewReader(stdout)
-	for _, e := range blobs {
-		content, err := readBatchObject(reader)
-		if err != nil {
-			return result, fmt.Errorf("failed to read %s: %w", e.path, err)
-		}
-		if err := writeEntry(destPath, e, content); err != nil {
-			return result, err
-		}
-		sum := sha256.Sum256(content)
-		result.Digests = append(result.Digests, FileDigest{Path: e.path, SHA256: hex.EncodeToString(sum[:])})
-	}
-
-	return result, nil
-}
-
-// readBatchObject reads one "<sha> <type> <size>\n<content>\n" response.
-func readBatchObject(reader *bufio.Reader) ([]byte, error) {
-	header, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	fields := strings.Fields(header)
-	if len(fields) != 3 {
-		return nil, fmt.Errorf("unexpected cat-file header %q", strings.TrimSpace(header))
-	}
-	size, err := strconv.Atoi(fields[2])
-	if err != nil {
-		return nil, fmt.Errorf("unexpected cat-file size in %q", strings.TrimSpace(header))
-	}
-
-	content := make([]byte, size)
-	if _, err := io.ReadFull(reader, content); err != nil {
-		return nil, err
-	}
-	// Each object is followed by a newline that is not part of the content.
-	if _, err := reader.Discard(1); err != nil {
-		return nil, err
-	}
-	return content, nil
-}
-
-// writeEntry materialises one blob as a file or a symlink.
-func writeEntry(destPath string, e treeEntry, content []byte) error {
-	target, err := safeJoin(destPath, e.path)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(target), dirPerms); err != nil {
-		return fmt.Errorf("failed to create directory for %s: %w", e.path, err)
-	}
-
-	// A symlink's blob content is the path it points at.
-	if e.mode == modeSymlink {
-		if err := os.Symlink(string(content), target); err != nil {
-			return fmt.Errorf("failed to create symlink %s: %w", e.path, err)
-		}
-		return nil
-	}
-
-	perms := os.FileMode(0o644)
-	if e.mode == modeExecutable {
-		perms = 0o755
-	}
-	if err := os.WriteFile(target, content, perms); err != nil {
-		return fmt.Errorf("failed to write %s: %w", e.path, err)
-	}
-	return nil
-}
-
-// safeJoin resolves path under root, refusing anything that would escape it.
-// git rejects ".." and absolute paths in tree entries, so this should never
-// trigger — but a forensic tool is pointed at repositories it does not trust.
-func safeJoin(root, path string) (string, error) {
-	target := filepath.Join(root, filepath.FromSlash(path))
-	if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
-		return "", fmt.Errorf("tree entry %q escapes the snapshot directory", path)
-	}
-	return target, nil
+	return r.writeTree(ctx, destPath, entries, opts)
 }

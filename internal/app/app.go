@@ -4,14 +4,16 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/andpalmier/repopsy/v2/internal/anomaly"
 	"github.com/andpalmier/repopsy/v2/internal/console"
-	"github.com/andpalmier/repopsy/v2/internal/extractor"
 	"github.com/andpalmier/repopsy/v2/internal/git"
 	"github.com/andpalmier/repopsy/v2/internal/snapshot"
 )
@@ -26,6 +28,12 @@ const (
 	// detachedHeadDir holds commits that belong to no branch. git refuses "HEAD"
 	// as a branch name, so this cannot collide with a branch's directory.
 	detachedHeadDir = "HEAD"
+
+	// branchesPattern selects local branches, the default scope.
+	branchesPattern = "refs/heads/"
+
+	// pullHeadPattern selects the head of every GitHub pull request.
+	pullHeadPattern = "refs/pull/*/head"
 )
 
 // Config holds everything one run needs, resolved from the command line.
@@ -40,6 +48,38 @@ type Config struct {
 	// IncludeRewritten also extracts commits recovered from the reflog.
 	IncludeRewritten bool
 
+	// Refs selects refs by for-each-ref pattern instead of local branches.
+	// AllRefs selects every ref except those in snapshot.ExcludedFromAllRefs.
+	Refs    []string
+	AllRefs bool
+
+	// PreserveModes, NoTree and Paths control what each tree/ holds.
+	PreserveModes bool
+	NoTree        bool
+	Paths         []string
+
+	// Dedupe stores each commit once under commits/ and links ref
+	// directories to it.
+	Dedupe bool
+
+	// DryRun reports what would be extracted and writes nothing.
+	DryRun bool
+
+	// JSON also writes a JSON form of each record.
+	JSON bool
+
+	// AllowedSigners verifies SSH signatures against this file.
+	AllowedSigners string
+
+	// Thresholds tune the anomaly checks.
+	Thresholds anomaly.Thresholds
+
+	// Track lists strings whose history is recorded in STRINGS.txt.
+	Track []string
+
+	// ScanSecrets records credential-shaped strings in SECRETS.txt.
+	ScanSecrets bool
+
 	// Writer receives all terminal output. Defaults to standard error.
 	Writer io.Writer
 
@@ -47,17 +87,6 @@ type Config struct {
 	ToolVersion string
 	ToolCommit  string
 	ToolBuilt   string
-}
-
-// branchRun is one branch's contribution to an explosion. It is the single
-// accumulator: the console summary and the extraction manifest are both
-// projections of it.
-type branchRun struct {
-	label    string // the ref as reported to the user
-	commits  int    // reachable commits found, before any recovery
-	unparsed int    // records git emitted that could not be parsed
-	skipped  string // why the ref produced nothing, if it did not
-	results  []extractor.Result
 }
 
 // Run explodes the repository described by cfg.
@@ -68,6 +97,24 @@ func Run(ctx context.Context, cfg Config) error {
 	repo, err := git.Open(cfg.RepoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository: %w", err)
+	}
+	if cfg.AllowedSigners != "" {
+		if _, err := os.Stat(cfg.AllowedSigners); err != nil {
+			return fmt.Errorf("allowed signers file: %w", err)
+		}
+		abs, err := filepath.Abs(cfg.AllowedSigners)
+		if err != nil {
+			return fmt.Errorf("allowed signers file: %w", err)
+		}
+		cfg.AllowedSigners = abs
+		repo.SetAllowedSigners(abs)
+	}
+
+	var filter *git.PathFilter
+	if len(cfg.Paths) > 0 {
+		if filter, err = git.NewPathFilter(cfg.Paths); err != nil {
+			return err
+		}
 	}
 
 	outDir, err := resolveOutputDir(cfg, repo)
@@ -81,37 +128,70 @@ func Run(ctx context.Context, cfg Config) error {
 		OutputDir: outDir,
 		Workers:   cfg.Workers,
 		Limit:     cfg.Limit,
+		Scope:     scopeText(cfg),
+		DryRun:    cfg.DryRun,
 	})
+	if len(repo.Shallow) > 0 {
+		out.ShallowRepository(len(repo.Shallow))
+	}
 
-	// scheduled holds every commit hash already extracted, so a commit several
-	// reflogs remember is recovered once.
-	scheduled := map[string]bool{}
+	p, err := buildPlan(ctx, out, repo, outDir, cfg)
+	if err != nil {
+		return err
+	}
+	if p.pullHint > 0 {
+		out.PullRefsNotExtracted(p.pullHint)
+	}
 
-	var runs []branchRun
 	var runErr error
-	if cfg.Branch != "" {
-		runs, runErr = runSingleBranch(ctx, out, repo, outDir, cfg, scheduled)
-	} else {
-		runs, runErr = runAllBranches(ctx, out, repo, outDir, cfg, scheduled)
+	if err := p.recoverRewritten(ctx, out, repo, outDir, cfg); err != nil {
+		runErr = err
+	}
+	p.detectAnomalies(len(repo.Shallow) > 0, cfg.Thresholds)
 
-		// Work abandoned on a detached head belongs to no branch, so no branch
-		// reflog recovers it. Only in all-branches mode: naming one branch means
-		// that branch's history.
-		if headRun, err := runDetachedHead(ctx, out, repo, outDir, cfg, scheduled); err != nil {
-			if runErr == nil {
-				runErr = err
-			}
-		} else if headRun != nil {
-			runs = append(runs, *headRun)
-		}
+	if cfg.DryRun {
+		return dryRun(ctx, out, repo, cfg, filter, p)
+	}
+
+	opts := git.ExtractOptions{PreserveModes: cfg.PreserveModes, NoTree: cfg.NoTree, Paths: filter}
+	if cfg.NoTree {
+		// Most blobs are shared between commits, so hashing each once is what
+		// makes checksums affordable without writing any tree.
+		opts.Digests = git.NewDigestCache()
+	}
+
+	var extractErr error
+	if cfg.Dedupe {
+		extractErr = p.extractDeduplicated(ctx, repo, outDir, cfg, opts)
+	} else {
+		extractErr = p.extractPerRef(ctx, out, repo, cfg, opts)
+	}
+	if runErr == nil {
+		runErr = extractErr
 	}
 
 	// Written even for a partial run: a folder of snapshots that cannot say
 	// where it came from is not evidence.
-	writeReports(ctx, out, outDir, cfg, repo, startedAt, runs)
+	reportErr := writeReports(ctx, out, outDir, cfg, repo, startedAt, p)
+	if runErr == nil {
+		runErr = reportErr
+	} else if reportErr != nil {
+		runErr = errors.Join(runErr, reportErr)
+	}
 
-	out.Summary(outDir, outcomes(runs), cfg.Verbose)
+	out.Summary(outDir, outcomes(p.runs), cfg.Verbose)
 	return runErr
+}
+
+// scopeText describes a non-default ref selection for the banner.
+func scopeText(cfg Config) string {
+	switch {
+	case cfg.AllRefs:
+		return "all except " + strings.Join(snapshot.ExcludedFromAllRefs, ", ")
+	case len(cfg.Refs) > 0:
+		return strings.Join(cfg.Refs, ", ")
+	}
+	return ""
 }
 
 // resolveOutputDir picks the output directory and refuses to reuse an existing
@@ -127,6 +207,11 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 		return "", fmt.Errorf("failed to resolve output path: %w", err)
 	}
 
+	// A dry run writes nothing, so it neither needs nor creates the directory.
+	if cfg.DryRun {
+		return outDir, nil
+	}
+
 	if info, err := os.Stat(outDir); err == nil && info.IsDir() {
 		return "", fmt.Errorf("output directory already exists: %s", outDir)
 	}
@@ -139,275 +224,4 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 		return "", fmt.Errorf("cannot create output directory %s: %w", outDir, err)
 	}
 	return outDir, nil
-}
-
-// runAllBranches explodes every local branch into its own directory tree.
-func runAllBranches(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) ([]branchRun, error) {
-	branches, err := repo.ListBranches(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list branches: %w", err)
-	}
-	if len(branches) == 0 {
-		return nil, fmt.Errorf("no branches found")
-	}
-
-	out.BranchesFound(len(branches))
-
-	var runs []branchRun
-	var extractionErr error
-
-	for i, branch := range branches {
-		if ctx.Err() != nil {
-			return runs, ctx.Err()
-		}
-
-		out.BranchStarted(i+1, len(branches), branch)
-		run := branchRun{label: branch}
-
-		listed, err := repo.ListCommits(ctx, git.ListOptions{
-			Branch:  branch,
-			Limit:   cfg.Limit,
-			Reverse: true,
-		})
-		if err != nil {
-			out.BranchListFailed(branch, err)
-			run.skipped = "could not list commits: " + err.Error()
-			runs = append(runs, run)
-			continue
-		}
-		commits := listed.Commits
-		run.unparsed = listed.Unparsed
-		if listed.Unparsed > 0 {
-			out.UnparsedRecords(listed.Unparsed)
-		}
-		if len(commits) == 0 {
-			out.BranchEmpty()
-			run.skipped = "no commits"
-			runs = append(runs, run)
-			continue
-		}
-
-		out.BranchCommits(len(commits))
-		run.commits = len(commits)
-
-		// Recovery happens before extraction so both sets travel through one
-		// pass, and therefore one progress bar.
-		all, err := withRewritten(ctx, out, repo, branch, cfg, commits, scheduled)
-		if err != nil && extractionErr == nil {
-			extractionErr = err
-		}
-
-		results, err := extract(ctx, repo, outDir, branch, cfg, all)
-		run.results = results
-		if err != nil && extractionErr == nil {
-			extractionErr = err
-		}
-
-		runs = append(runs, run)
-	}
-
-	return runs, extractionErr
-}
-
-// runSingleBranch explodes one branch directly into the output directory.
-func runSingleBranch(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) ([]branchRun, error) {
-	listed, err := repo.ListCommits(ctx, git.ListOptions{
-		Branch:  cfg.Branch,
-		Limit:   cfg.Limit,
-		Reverse: true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list commits: %w", err)
-	}
-	commits := listed.Commits
-	if listed.Unparsed > 0 {
-		out.UnparsedRecords(listed.Unparsed)
-	}
-	if len(commits) == 0 {
-		return nil, fmt.Errorf("no commits found")
-	}
-
-	out.CommitsToExtract(len(commits))
-
-	all, err := withRewritten(ctx, out, repo, cfg.Branch, cfg, commits, scheduled)
-	if err != nil {
-		return nil, err
-	}
-
-	// An explicit branch means a flat layout, so no branch is passed through.
-	results, err := extract(ctx, repo, outDir, "", cfg, all)
-
-	return []branchRun{{
-		label:    cfg.Branch,
-		commits:  len(commits),
-		unparsed: listed.Unparsed,
-		results:  results,
-	}}, err
-}
-
-// withRewritten returns the reachable commits followed by any the ref no longer
-// reaches, and marks all of them scheduled. Recovery is off unless asked for:
-// the recovered set changes the snapshot count, and on most repositories it is
-// empty.
-func withRewritten(ctx context.Context, out *console.Console, repo *git.Repository, ref string, cfg Config, reachable []git.Commit, scheduled map[string]bool) ([]git.Commit, error) {
-	all := make([]git.Commit, 0, len(reachable))
-	all = append(all, reachable...)
-	for _, c := range reachable {
-		scheduled[c.Hash] = true
-	}
-
-	if !cfg.IncludeRewritten || ctx.Err() != nil {
-		return all, nil
-	}
-
-	rewritten, err := repo.RewrittenCommits(ctx, ref, scheduled, cfg.Limit)
-	if err != nil {
-		return all, err
-	}
-	if len(rewritten) == 0 {
-		return all, nil
-	}
-
-	out.RewrittenFound(len(rewritten))
-	for _, c := range rewritten {
-		scheduled[c.Hash] = true
-	}
-	return append(all, rewritten...), nil
-}
-
-// runDetachedHead extracts commits HEAD's reflog remembers that no branch
-// reaches and no branch reflog recovered — work abandoned on a detached head.
-//
-// They belong to no branch, so they go in a top-level HEAD directory. git
-// refuses "HEAD" as a branch name, so that cannot collide with a branch's own
-// directory.
-func runDetachedHead(ctx context.Context, out *console.Console, repo *git.Repository, outDir string, cfg Config, scheduled map[string]bool) (*branchRun, error) {
-	if !cfg.IncludeRewritten || ctx.Err() != nil {
-		return nil, nil
-	}
-
-	abandoned, err := repo.RewrittenCommits(ctx, detachedHeadDir, scheduled, cfg.Limit)
-	if err != nil || len(abandoned) == 0 {
-		return nil, err
-	}
-
-	out.DetachedHeadFound(len(abandoned))
-	for _, c := range abandoned {
-		scheduled[c.Hash] = true
-	}
-
-	results, err := extract(ctx, repo, outDir, detachedHeadDir, cfg, abandoned)
-	return &branchRun{label: detachedHeadDir + " (detached)", results: results}, err
-}
-
-// extract runs the extractor over one branch's commits.
-func extract(ctx context.Context, repo *git.Repository, outDir, branch string, cfg Config, commits []git.Commit) ([]extractor.Result, error) {
-	ext := extractor.New(repo, extractor.Config{
-		OutputDir: outDir,
-		Branch:    branch,
-		Workers:   cfg.Workers,
-		Verbose:   cfg.Verbose,
-		Writer:    cfg.Writer,
-	})
-	return ext.Run(ctx, commits)
-}
-
-// outcomes projects the runs onto what the console needs to report.
-func outcomes(runs []branchRun) []console.Outcome {
-	var all []console.Outcome
-	for _, run := range runs {
-		for _, r := range run.results {
-			all = append(all, console.Outcome{ShortHash: r.Commit.ShortHash, Err: r.Error})
-		}
-	}
-	return all
-}
-
-// writeReports records everything about the run that is not a single commit.
-// Each failure is reported and the rest still get written: a missing reflog
-// should not cost you the manifest.
-func writeReports(ctx context.Context, out *console.Console, outDir string, cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) {
-	reports := []snapshot.Report{buildManifest(cfg, repo, startedAt, runs)}
-
-	// Skipped silently on cancellation, where these would only fail noisily.
-	if ctx.Err() == nil {
-		if entries, err := repo.Reflog(ctx); err != nil {
-			out.ReportFailed(snapshot.Reflog{}.Filename(), err)
-		} else {
-			reports = append(reports, snapshot.Reflog{Entries: entries})
-		}
-
-		if tags, err := repo.Tags(ctx); err != nil {
-			out.ReportFailed(snapshot.Tags{}.Filename(), err)
-		} else {
-			reports = append(reports, snapshot.Tags{Tags: tags})
-		}
-	}
-
-	if state, err := repo.ReadState(); err != nil {
-		out.ReportFailed(snapshot.RepositoryState{}.Filename(), err)
-	} else {
-		reports = append(reports, snapshot.RepositoryState{State: state})
-	}
-
-	reports = append(reports, snapshot.NewIdentities(extracted(runs)))
-
-	for _, r := range reports {
-		if err := snapshot.Write(outDir, r); err != nil {
-			out.ReportFailed(r.Filename(), err)
-		}
-	}
-}
-
-// buildManifest projects the runs onto the provenance record.
-func buildManifest(cfg Config, repo *git.Repository, startedAt time.Time, runs []branchRun) snapshot.Manifest {
-	m := snapshot.Manifest{
-		ToolVersion: cfg.ToolVersion,
-		ToolCommit:  cfg.ToolCommit,
-		ToolBuilt:   cfg.ToolBuilt,
-		StartedAt:   startedAt,
-		FinishedAt:  time.Now(),
-		RepoPath:    repo.Path,
-		Branch:      cfg.Branch,
-		Workers:     cfg.Workers,
-		Limit:       cfg.Limit,
-	}
-
-	for _, run := range runs {
-		summary := snapshot.BranchSummary{
-			Name:     run.label,
-			Commits:  run.commits,
-			Unparsed: run.unparsed,
-			Skipped:  run.skipped,
-		}
-		for _, r := range run.results {
-			if r.Commit.Unreachable {
-				summary.Rewritten++
-			}
-			if r.Error != nil {
-				m.Failures = append(m.Failures, snapshot.Failure{
-					Branch:    run.label,
-					ShortHash: r.Commit.ShortHash,
-					Reason:    r.Error.Error(),
-				})
-				continue
-			}
-			summary.Extracted++
-		}
-		m.Branches = append(m.Branches, summary)
-	}
-	return m
-}
-
-// extracted flattens the commits that produced a snapshot.
-func extracted(runs []branchRun) []git.Commit {
-	var commits []git.Commit
-	for _, run := range runs {
-		for _, r := range run.results {
-			if r.Error == nil {
-				commits = append(commits, r.Commit)
-			}
-		}
-	}
-	return commits
 }

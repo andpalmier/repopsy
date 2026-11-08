@@ -63,20 +63,29 @@ homebrew_casks:
     homepage: "https://github.com/andpalmier/repopsy"
     description: "Forensic tool for analyzing git repository history"
     # Homebrew quarantines what a cask downloads, and these binaries are neither
-    # signed nor notarized, so macOS would refuse to run them with "repopsy is
+    # signed nor notarized, so macOS refuses to run them with "repopsy is
     # damaged and cannot be opened". Formulae did not have this problem, so this
     # is required by the move to casks rather than optional.
     #
-    # This clears Gatekeeper's quarantine attribute, which is a bypass: Apple may
-    # withdraw it, and signing plus notarization is the durable answer. Doing
-    # that needs an Apple Developer account, so it is a separate decision.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/repopsy"]
-          end
-
+    # Clearing the quarantine attribute is a bypass: Apple may withdraw it, and
+    # signing plus notarization is the durable answer. That needs an Apple
+    # Developer account, so it is a separate decision.
+    #
+    # This goes through custom_block rather than the hooks section because
+    # GoReleaser's hooks still emit Homebrew's deprecated `postflight` stanza
+    # (goreleaser/goreleaser#6870). Homebrew 7 wants the declarative
+    # `postflight_steps` DSL, which custom_block can write directly. Switch to
+    # `hooks.post.install_steps` once GoReleaser v2.19 ships it.
+    #
+    # {{ "{{staged_path}}" }} is escaped so GoReleaser emits the literal
+    # {{staged_path}} token for Homebrew to expand, instead of trying to
+    # evaluate it as a GoReleaser template action itself.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/repopsy"]
+        end
+      end
 # Replaces the deprecated "dockers" and "docker_manifests" sections. One entry
 # now covers both architectures: dockers_v2 runs "docker buildx build" across
 # platforms and pushes a single multi-platform image, so the per-architecture
