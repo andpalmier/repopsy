@@ -4,6 +4,10 @@ Versions follow [semantic versioning](https://semver.org) and are taken from git
 tags at release time. Earlier releases are described on the
 [Releases](https://github.com/andpalmier/repopsy/releases) page.
 
+## 2.2.1 (2026-11-08)
+
+- Rebuilt the release assets after GitHub returned 504 for the v2.2.0 binary downloads.
+
 ## 2.2.0 (2026-11-08)
 
 ### Safety
