@@ -142,3 +142,29 @@ func TestScan(t *testing.T) {
 		t.Errorf("github LiveAt = %v", gh.Occurrences[0].LiveAt)
 	}
 }
+
+func TestScanLiveAtPathWithNewline(t *testing.T) {
+	b := gittest.New(t)
+	b.Write("a\nb.txt", "TOKEN = '"+ghToken+"'\n", 0o644)
+	b.Commit("newline path")
+	main := b.Branch()
+
+	repo, err := git.Open(b.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := repo.ListCommits(context.Background(), git.ListOptions{Tips: []string{"refs/heads/" + main}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := Scan(context.Background(), repo, listed.Commits, []Tip{{Label: main, Rev: "refs/heads/" + main}})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(findings) != 1 || len(findings[0].Occurrences) != 1 {
+		t.Fatalf("findings = %+v", findings)
+	}
+	if got := findings[0].Occurrences[0].LiveAt; len(got) != 1 || got[0] != main {
+		t.Fatalf("LiveAt = %v, want %s", got, main)
+	}
+}

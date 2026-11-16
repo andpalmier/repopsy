@@ -37,14 +37,14 @@ matched literally and case-sensitively, across every file including binaries.
 Commits outside the extracted refs are not searched.
 {{range .Histories}}
 {{quote .String}}
-{{with first .}}  First appears:  {{.ShortHash}}  {{.Date | formatDate}}  {{.Author}} <{{.Email}}>
-                  {{.Subject}}
+{{with first .}}  First appears:  {{.ShortHash}}  {{.Date | formatDate}}  {{.Author | text}} <{{.Email | text}}>
+                  {{.Subject | text}}
 {{else}}  First appears:  never, in the extracted history
 {{end}}  Changes:        {{len .Changes}} commit(s)
-{{range .Changes}}    {{.ShortHash}}  {{.Date | formatDate}}  {{signed .Delta}}  {{.Author}} <{{.Email}}>  {{.Subject}}
+{{range .Changes}}    {{.ShortHash}}  {{.Date | formatDate}}  {{signed .Delta}}  {{.Author | text}} <{{.Email | text}}>  {{.Subject | text}}
 {{range .Paths}}      {{pathText .Path}}  {{.Before}} -> {{.After}}
 {{end}}{{end}}  At ref tips:
-{{range .Tips}}    {{.Ref}}: {{.Total}}
+{{range .Tips}}    {{.Ref | text}}: {{.Total}}
 {{range .Paths}}      {{pathText .Path}}  {{.After}}
 {{end}}{{end}}{{end}}`))
 

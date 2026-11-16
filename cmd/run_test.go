@@ -154,6 +154,39 @@ func TestRunSingleBranchIsFlat(t *testing.T) {
 	}
 }
 
+func TestRunBranchIgnoresSameNamedTag(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Write("a.txt", "one\n", 0o644)
+	first := repo.Commit("first")
+	repo.Write("b.txt", "two\n", 0o644)
+	tip := repo.Commit("second")
+	branch := repo.Branch()
+	repo.Git("tag", branch, first)
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	code, _, stderr := invoke(t, "-b", branch, "-o", outDir, repo.Dir)
+	if code != 0 {
+		t.Fatalf("exit %d\nstderr: %s", code, stderr)
+	}
+
+	snaps, err := filepath.Glob(filepath.Join(outDir, "*", snapshot.MetadataFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Fatalf("got %d snapshots, want the branch's 2 commits", len(snaps))
+	}
+	foundTip := false
+	for _, path := range snaps {
+		if strings.Contains(read(t, path), "Hash:           "+tip) {
+			foundTip = true
+		}
+	}
+	if !foundTip {
+		t.Fatalf("branch tip %s was not extracted; snapshots came from the same-named tag", tip)
+	}
+}
+
 func TestRunFailures(t *testing.T) {
 	repo := gittest.New(t).WithCommits(1)
 

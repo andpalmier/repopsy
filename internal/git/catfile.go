@@ -14,10 +14,7 @@ import (
 // process, calling fn with each object's index and content in order. A missing
 // object is an error.
 func (r *Repository) catFileBatch(ctx context.Context, ids []string, fn func(i int, content []byte) error) error {
-	return r.catFile(ctx, ids, func(i int, content io.Reader, _ int64, found bool) error {
-		if !found {
-			return fmt.Errorf("object %s is missing", ids[i])
-		}
+	return r.catFileBatchStream(ctx, ids, func(i int, content io.Reader) error {
 		data, err := io.ReadAll(content)
 		if err != nil {
 			return fmt.Errorf("failed to read object %s: %w", ids[i], err)
@@ -26,32 +23,27 @@ func (r *Repository) catFileBatch(ctx context.Context, ids []string, fn func(i i
 	})
 }
 
-// ReadObjects reads the objects named by names, which may be any name
-// cat-file accepts, such as "<commit>:<path>". fn is called for every name in
-// order, with found false when it names nothing. Names containing a newline
-// cannot be requested and are reported as not found.
-func (r *Repository) ReadObjects(ctx context.Context, names []string, fn func(i int, content []byte, found bool)) error {
-	var ask []string
-	var idx []int
-	for i, n := range names {
-		if strings.ContainsAny(n, "\n\r") {
-			fn(i, nil, false)
-			continue
-		}
-		ask = append(ask, n)
-		idx = append(idx, i)
-	}
-	return r.catFile(ctx, ask, func(i int, content io.Reader, _ int64, found bool) error {
+// catFileBatchStream is catFileBatch without materialising each object. The
+// callback must consume the reader before returning.
+func (r *Repository) catFileBatchStream(ctx context.Context, ids []string, fn func(i int, content io.Reader) error) error {
+	return r.catFile(ctx, ids, func(i int, content io.Reader, _ int64, found bool) error {
 		if !found {
-			fn(idx[i], nil, false)
-			return nil
+			return fmt.Errorf("object %s is missing", ids[i])
 		}
-		data, err := io.ReadAll(content)
-		if err != nil {
-			return fmt.Errorf("failed to read object %s: %w", ask[i], err)
-		}
-		fn(idx[i], data, true)
-		return nil
+		return fn(i, content)
+	})
+}
+
+// ReadObjectAt resolves rev:path and streams the blob to fn. The path may
+// contain a newline or carriage return because it is resolved as one argument,
+// not embedded in cat-file's line-based protocol.
+func (r *Repository) ReadObjectAt(ctx context.Context, rev, path string, fn func(content io.Reader, found bool) error) error {
+	hash, err := r.output(ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", rev+":"+path)
+	if err != nil {
+		return fn(nil, false)
+	}
+	return r.catFile(ctx, []string{hash}, func(_ int, content io.Reader, _ int64, found bool) error {
+		return fn(content, found)
 	})
 }
 

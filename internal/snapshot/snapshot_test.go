@@ -248,6 +248,34 @@ func TestWriteMetadataVariants(t *testing.T) {
 	}
 }
 
+func TestWriteMetadataEscapesTerminalControls(t *testing.T) {
+	c := sampleCommit()
+	c.Author = "A\x1b[31m"
+	c.Subject = "subject\x1b]52;c;evil\x07"
+	c.FullMessage = "body\x1b[2J\nnext\tline"
+
+	var buf strings.Builder
+	if err := WriteMetadata(&buf, c); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Fatalf("raw terminal controls survived:\n%q", got)
+	}
+	for _, want := range []string{`A\x1b[31m`, `subject\x1b]52;c;evil\x07`, "body\\x1b[2J\nnext\tline"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("escaped output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPathTextEscapesTerminalControls(t *testing.T) {
+	got := pathText("a\x1bb")
+	if strings.Contains(got, "\x1b") || !strings.Contains(got, `\x1b`) {
+		t.Fatalf("pathText = %q, want an escaped control", got)
+	}
+}
+
 func testSnapshotPath(outDir, branch string, c git.Commit) string {
 	ref := ""
 	if branch != "" {
@@ -257,8 +285,8 @@ func testSnapshotPath(outDir, branch string, c git.Commit) string {
 }
 
 func TestPath(t *testing.T) {
-	c := sampleCommit() // AuthorDate 1701786622 UTC, ShortHash 8f6a2b1
-	const snap = "20231205_143022_8f6a2b1"
+	c := sampleCommit() // AuthorDate 1701786622 UTC, full hash is the directory suffix
+	const snap = "20231205_143022_8f6a2b1c4d5e6f70819243546576879a0b1c2d3e"
 
 	tests := []struct {
 		name   string
@@ -319,11 +347,22 @@ func TestPathDistinguishesSlashAndUnderscoreBranches(t *testing.T) {
 	if slashed == underscored {
 		t.Fatalf("feat/x and feat_x both map to %q", slashed)
 	}
-	if want := filepath.Join("/out", RefsDir, "feat", "x", "20231205_143022_8f6a2b1"); slashed != want {
+	if want := filepath.Join("/out", RefsDir, "feat", "x", "20231205_143022_8f6a2b1c4d5e6f70819243546576879a0b1c2d3e"); slashed != want {
 		t.Errorf("feat/x -> %q, want %q", slashed, want)
 	}
-	if want := filepath.Join("/out", RefsDir, "feat_x", "20231205_143022_8f6a2b1"); underscored != want {
+	if want := filepath.Join("/out", RefsDir, "feat_x", "20231205_143022_8f6a2b1c4d5e6f70819243546576879a0b1c2d3e"); underscored != want {
 		t.Errorf("feat_x -> %q, want %q", underscored, want)
+	}
+}
+
+func TestPathUsesFullHashToAvoidCollisions(t *testing.T) {
+	a := sampleCommit()
+	b := sampleCommit()
+	b.Hash = "0000000000000000000000000000000000000000"
+	b.ShortHash = a.ShortHash // the old seven-character name would collide
+
+	if got, other := testSnapshotPath("/out", "main", a), testSnapshotPath("/out", "main", b); got == other {
+		t.Fatalf("two commits share snapshot path %q", got)
 	}
 }
 
@@ -432,7 +471,7 @@ func TestPathKeepsRefNamesOutOfTheRootNamespace(t *testing.T) {
 
 	for _, ref := range []string{"EXTRACTION.txt", "REFLOG.txt", "TAGS.txt", "IDENTITIES.txt", "REPOSITORY.txt"} {
 		got := testSnapshotPath("/out", ref, c)
-		if want := filepath.Join("/out", RefsDir, ref, "20231205_143022_8f6a2b1"); got != want {
+		if want := filepath.Join("/out", RefsDir, ref, "20231205_143022_8f6a2b1c4d5e6f70819243546576879a0b1c2d3e"); got != want {
 			t.Errorf("Path for ref %q = %q, want %q", ref, got, want)
 		}
 		// Nothing a ref is called may land directly in the output root.

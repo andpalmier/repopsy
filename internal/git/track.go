@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sort"
 	"strings"
@@ -77,7 +78,7 @@ type TrackRef struct {
 	Rev   string
 }
 
-const trackFormat = "%x1e%H%x00%aI%x00%an%x00%ae%x00%s%x00"
+const trackFormat = "%H%x00%aI%x00%an%x00%ae%x00%s"
 
 // TrackString records every commit reachable from refs that changes how often
 // s occurs, and how often it occurs at each ref's tip.
@@ -125,7 +126,7 @@ func (r *Repository) TrackString(ctx context.Context, s string, refs []TrackRef)
 // on either side of each.
 func (r *Repository) stringChanges(ctx context.Context, s string, revs []string) ([]StringChange, error) {
 	cmd := r.command(ctx, "-c", "core.quotePath=false", "log", "-S"+s, "--format="+trackFormat, "--raw", "--no-abbrev",
-		"--diff-merges=first-parent", "--no-textconv", "--no-ext-diff", "--no-show-signature", "--reverse", "--stdin")
+		"--diff-merges=first-parent", "--no-textconv", "--no-ext-diff", "--no-show-signature", "--reverse", "--stdin", "-z")
 	cmd.Stdin = strings.NewReader(strings.Join(revs, "\n") + "\n")
 	out, err := cmd.Output()
 	if err != nil {
@@ -138,21 +139,27 @@ func (r *Repository) stringChanges(ctx context.Context, s string, revs []string)
 
 	var changes []StringChange
 	var blobs []string
-	for record := range strings.SplitSeq(string(out), recordSep) {
-		parts := strings.SplitN(record, fieldSep, 6)
-		if len(parts) < 6 {
-			continue
+	tokens := strings.Split(string(out), fieldSep)
+	for pos := 0; pos < len(tokens); {
+		if pos == len(tokens)-1 && tokens[pos] == "" {
+			break
 		}
+		if len(tokens)-pos < 5 {
+			return nil, fmt.Errorf("invalid git log record: only %d fields", len(tokens)-pos)
+		}
+		parts := tokens[pos : pos+5]
+		pos += 5
 		date, _ := parseGitDate(parts[1])
 		c := StringChange{Hash: parts[0], ShortHash: shortHash(parts[0]), Date: date,
 			Author: parts[2], Email: parts[3], Subject: parts[4]}
-		for line := range strings.SplitSeq(parts[5], "\n") {
-			// Without --pickaxe-all, git shows only the files whose count
-			// changed, which are exactly the paths involved.
-			if f, ok := parseRawLine(line); ok && strings.HasPrefix(line, ":") {
-				c.Paths = append(c.Paths, StringCount{Path: f.Path})
-				blobs = append(blobs, f.OldBlob, f.NewBlob)
-			}
+		files, next, err := parseRawTokens(tokens, pos)
+		if err != nil {
+			return nil, err
+		}
+		pos = next
+		for _, f := range files {
+			c.Paths = append(c.Paths, StringCount{Path: f.Path})
+			blobs = append(blobs, f.OldBlob, f.NewBlob)
 		}
 		changes = append(changes, c)
 	}
@@ -171,8 +178,12 @@ func (r *Repository) stringChanges(ctx context.Context, s string, revs []string)
 		}
 	}
 	needle := []byte(s)
-	if err := r.catFileBatch(ctx, fetch, func(i int, content []byte) error {
-		counts[fetch[i]] = bytes.Count(content, needle)
+	if err := r.catFileBatchStream(ctx, fetch, func(i int, content io.Reader) error {
+		count, err := countOccurrences(content, needle)
+		if err != nil {
+			return fmt.Errorf("failed to count object %s: %w", fetch[i], err)
+		}
+		counts[fetch[i]] = count
 		return nil
 	}); err != nil {
 		return nil, err
@@ -191,6 +202,74 @@ func (r *Repository) stringChanges(ctx context.Context, s string, revs []string)
 	// not chronological.
 	sort.SliceStable(changes, func(a, b int) bool { return changes[a].Date.Before(changes[b].Date) })
 	return changes, nil
+}
+
+// parseRawTokens reads the NUL-delimited raw diff entries that follow one
+// commit's fields in track output. Paths are separate tokens, so a newline or
+// any other byte in a name cannot split a record.
+func parseRawTokens(tokens []string, pos int) ([]FileChange, int, error) {
+	var files []FileChange
+	for pos < len(tokens) {
+		token := strings.TrimPrefix(tokens[pos], "\n")
+		if !strings.HasPrefix(token, ":") {
+			break
+		}
+		f, ok := parseRawMeta(token)
+		if !ok {
+			return nil, pos, fmt.Errorf("invalid raw diff entry %q", token)
+		}
+		pos++
+		if pos >= len(tokens) {
+			return nil, pos, fmt.Errorf("raw diff entry %q has no path", token)
+		}
+		if isRenameOrCopy(f.Status) {
+			f.OldPath = tokens[pos]
+			pos++
+			if pos >= len(tokens) {
+				return nil, pos, fmt.Errorf("raw rename %q has no new path", token)
+			}
+		}
+		f.Path = tokens[pos]
+		pos++
+		files = append(files, f)
+	}
+	return files, pos, nil
+}
+
+// countOccurrences counts non-overlapping matches while reading in bounded
+// chunks. A short suffix is carried across reads so a match on a chunk boundary
+// is still counted exactly once.
+func countOccurrences(r io.Reader, needle []byte) (int, error) {
+	const chunkSize = 32 * 1024
+	buf := make([]byte, chunkSize+len(needle)-1)
+	pending := buf[:0]
+	total := 0
+	for {
+		n, err := r.Read(buf[len(pending):])
+		if n > 0 {
+			pending = pending[:len(pending)+n]
+			search := 0
+			for {
+				i := bytes.Index(pending[search:], needle)
+				if i < 0 {
+					break
+				}
+				i += search
+				total++
+				search = i + len(needle)
+			}
+			keep := max(search, len(pending)-(len(needle)-1))
+			copy(pending, pending[keep:])
+			pending = pending[:len(pending)-keep]
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
 // countAtTip counts occurrences of s in every file of a commit's tree.

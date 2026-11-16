@@ -151,7 +151,7 @@ Reflogs and repository state do not survive a clone. To recover rewritten histor
 ├── SECRETS.txt                 # with --scan-secrets
 ├── refs/
 │   ├── main/
-│   │   └── 20231205_143022_abc1234/
+│   │   └── 20231205_143022_abc1234def5678901234567890abcdef12345678/
 │   │       ├── COMMIT_INFO.txt
 │   │       ├── SHA256SUMS
 │   │       └── tree/
@@ -164,7 +164,7 @@ Reflogs and repository state do not survive a clone. To recover rewritten histor
 
 Repository content stays under `tree/`. Records stay beside it, so a file named `COMMIT_INFO.txt` in the repository cannot overwrite the record with the same name. Ref directories stay under `refs/` or `other-refs/`, so a branch named `EXTRACTION.txt` cannot replace the manifest.
 
-With `-b`, snapshots go directly under the output directory because there is only one ref. Snapshot names use the commit's recorded date offset and short hash, so the same repository produces the same names on any host.
+With `-b`, snapshots go directly under the output directory because there is only one ref. Snapshot names use the commit's recorded date offset and full hash, so the same repository produces the same names on any host and two commits cannot share a directory through a short-hash collision.
 
 ## Safety
 
@@ -194,7 +194,7 @@ Every skipped or renamed path appears in `COMMIT_INFO.txt` and is summarized in 
 Each snapshot has `SHA256SUMS` in a format `sha256sum -c` accepts. Paths are relative to the snapshot directory:
 
 ```bash
-cd <repo>-exploded/refs/main/20231205_143022_abc1234
+cd <repo>-exploded/refs/main/20231205_143022_abc1234def5678901234567890abcdef12345678
 sha256sum -c SHA256SUMS
 ```
 

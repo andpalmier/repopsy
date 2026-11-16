@@ -52,7 +52,7 @@ const (
 	// deduplicated, with per-ref directories linking to it.
 	CommitsDir = "commits"
 
-	// timestampFormat names a snapshot directory: 20231205_143022_abc1234.
+	// timestampFormat prefixes a snapshot directory: 20231205_143022_<hash>.
 	timestampFormat = "20060102_150405"
 
 	// dateFormat renders a commit date with the offset git recorded.
@@ -107,7 +107,7 @@ func TreePath(snapshotPath string) string {
 
 // dirName is the snapshot's own directory name, without any parent path.
 func dirName(c git.Commit) string {
-	return c.AuthorDate.Format(timestampFormat) + "_" + c.ShortHash
+	return c.AuthorDate.Format(timestampFormat) + "_" + c.Hash
 }
 
 // WriteMetadata renders a commit's metadata into w. Callers own the
@@ -150,20 +150,20 @@ const metadataTemplateStr = `COMMIT INFORMATION
 Hash:           {{.Hash}}
 Short Hash:     {{.ShortHash}}
 Tree:           {{.TreeHash}}
-{{if .Refs}}Refs:           {{.Refs}}
-{{end}}{{if .Encoding}}Encoding:       {{.Encoding}}
+{{if .Refs}}Refs:           {{.Refs | text}}
+{{end}}{{if .Encoding}}Encoding:       {{.Encoding | text}}
 {{end}}
 AUTHOR (who wrote the code)
 ---------------------------
-Name:           {{.Author}}
-Email:          {{.AuthorEmail}}
+Name:           {{.Author | text}}
+Email:          {{.AuthorEmail | text}}
 Date:           {{.AuthorDate | formatDate}}
 Timestamp:      {{.AuthorDate.Unix}}
 
 COMMITTER (who applied the commit)
 ----------------------------------
-Name:           {{.Committer}}
-Email:          {{.CommitterEmail}}
+Name:           {{.Committer | text}}
+Email:          {{.CommitterEmail | text}}
 Date:           {{.CommitDate | formatDate}}
 Timestamp:      {{.CommitDate.Unix}}
 {{if ne .Author .Committer}}
@@ -181,13 +181,13 @@ occur in normal use and indicates a rewritten or forged date.
 VERIFICATION
 ------------
 GPG Signature:  {{formatSignature .Signature}}
-{{if .Signature.Signed}}Signer:         {{with .Signature.Signer}}{{.}}{{else}}(not reported){{end}}
-Key:            {{with .Signature.Key}}{{.}}{{else}}(not reported){{end}}
-Fingerprint:    {{with .Signature.Fingerprint}}{{.}}{{else}}(not reported){{end}}
-Trust:          {{with .Signature.Trust}}{{.}}{{else}}(not reported){{end}}
-Signature Type: {{with .Signature.Type}}{{.}}{{else}}(not read){{end}}
-Issuer:         {{with .Signature.Describe}}{{.}}{{else}}(not stated in the signature){{end}}
-Claimed Signer: {{with .Signature.ClaimedSigner}}{{.}}{{else}}(not stated in the signature){{end}}
+{{if .Signature.Signed}}Signer:         {{with .Signature.Signer}}{{. | text}}{{else}}(not reported){{end}}
+Key:            {{with .Signature.Key}}{{. | text}}{{else}}(not reported){{end}}
+Fingerprint:    {{with .Signature.Fingerprint}}{{. | text}}{{else}}(not reported){{end}}
+Trust:          {{with .Signature.Trust}}{{. | text}}{{else}}(not reported){{end}}
+Signature Type: {{with .Signature.Type}}{{. | text}}{{else}}(not read){{end}}
+Issuer:         {{with .Signature.Describe}}{{. | text}}{{else}}(not stated in the signature){{end}}
+Claimed Signer: {{with .Signature.ClaimedSigner}}{{. | text}}{{else}}(not stated in the signature){{end}}
 Verified:       {{verifiedLine .Signature}}
 {{end}}
 LINEAGE
@@ -235,14 +235,14 @@ ANOMALIES
 COMMIT MESSAGE
 --------------
 Subject:
-{{.Subject}}
+{{.Subject | text}}
 
 Full Message:
-{{.FullMessage}}
+{{.FullMessage | multiline}}
 {{if .Notes}}
 NOTES
 -----
-{{.Notes}}
+{{.Notes | multiline}}
 {{end}}`
 
 // fileLine renders one changed file as a fixed-width row: status, line counts,
@@ -318,11 +318,13 @@ func issueLine(i git.PathIssue) string {
 	return fmt.Sprintf("RENAMED  %s  ->  %s  (%s)", pathText(i.Path), pathText(i.WrittenAs), i.Reason)
 }
 
-// pathText quotes names containing whitespace controls, which would otherwise
-// split a record across lines or columns.
+// pathText quotes names containing control characters, which would otherwise
+// split a record or inject terminal escape sequences.
 func pathText(p string) string {
-	if strings.ContainsAny(p, "\n\r\t") {
-		return strconv.Quote(p)
+	for _, r := range p {
+		if isControl(r) {
+			return strconv.Quote(p)
+		}
 	}
 	return p
 }

@@ -49,7 +49,7 @@ Output, in each snapshot under refs/<ref>/<timestamp>_<hash>/:
   never collide with repopsy's own records: a commit may contain a file called
   COMMIT_INFO.txt and a branch may be called EXTRACTION.txt.
 
-  Snapshot directories are named <timestamp>_<short-hash>, timestamped in the
+  Snapshot directories are named <timestamp>_<full-hash>, timestamped in the
   offset the commit records, so output is identical on any host. Branch names
   containing "/" nest as directories. Refs outside refs/heads/ go under
   other-refs/ by their path, e.g. other-refs/pull/12/head/. A commit on several

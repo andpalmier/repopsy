@@ -101,7 +101,10 @@ func (r *Repository) writeTree(ctx context.Context, destPath string, entries []t
 			}
 			full, err := safeJoin(destPath, b.written)
 			if err == nil {
-				err = os.Symlink(target, full)
+				err = os.MkdirAll(filepath.Dir(full), dirPerms)
+				if err == nil {
+					err = os.Symlink(target, full)
+				}
 			}
 			if err != nil {
 				if !isPathProblem(err) {

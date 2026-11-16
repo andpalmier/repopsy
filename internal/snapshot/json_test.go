@@ -60,7 +60,7 @@ func TestRefDir(t *testing.T) {
 	// The established branch layout is unchanged.
 	c := sampleCommit()
 	got := SnapshotIn(RefDir(out, "refs/heads/feat/x"), c)
-	want := filepath.FromSlash("/out/refs/feat/x/20231205_143022_8f6a2b1")
+	want := filepath.FromSlash("/out/refs/feat/x/20231205_143022_8f6a2b1c4d5e6f70819243546576879a0b1c2d3e")
 	if got != want {
 		t.Errorf("snapshot path = %q, want %q", got, want)
 	}

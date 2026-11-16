@@ -8,9 +8,11 @@
 package secrets
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -226,7 +228,8 @@ func Scan(ctx context.Context, repo *git.Repository, commits []git.Commit, tips 
 // file contains, so no value has to be kept from the scan.
 func liveAtTips(ctx context.Context, repo *git.Repository, findings []Finding, tips []Tip) error {
 	type key struct{ tip, path string }
-	var names []string
+	type request struct{ tip, path string }
+	var requests []request
 	index := map[key]int{}
 	for _, f := range findings {
 		for _, o := range f.Occurrences {
@@ -235,26 +238,28 @@ func liveAtTips(ctx context.Context, repo *git.Repository, findings []Finding, t
 				if _, ok := index[k]; ok {
 					continue
 				}
-				index[k] = len(names)
-				names = append(names, t.Rev+":"+o.Path)
+				index[k] = len(requests)
+				requests = append(requests, request{tip: t.Rev, path: o.Path})
 			}
 		}
 	}
 
-	present := make([]map[string]bool, len(names))
-	err := repo.ReadObjects(ctx, names, func(i int, content []byte, found bool) {
-		if !found {
-			return
-		}
-		present[i] = map[string]bool{}
-		for line := range strings.SplitSeq(string(content), "\n") {
-			for _, m := range scanLine(line) {
-				present[i][m.hash] = true
+	present := make([]map[string]bool, len(requests))
+	for i, req := range requests {
+		err := repo.ReadObjectAt(ctx, req.tip, req.path, func(content io.Reader, found bool) error {
+			if !found {
+				return nil
 			}
+			present[i] = map[string]bool{}
+			return scanReader(content, func(line string) {
+				for _, m := range scanLine(line) {
+					present[i][m.hash] = true
+				}
+			})
+		})
+		if err != nil {
+			return err
 		}
-	})
-	if err != nil {
-		return err
 	}
 
 	for fi := range findings {
@@ -269,6 +274,25 @@ func liveAtTips(ctx context.Context, repo *git.Repository, findings []Finding, t
 		}
 	}
 	return nil
+}
+
+// scanReader calls fn for each newline-delimited line without holding the
+// whole object in memory. A line can still be large, but one line is the most
+// this needs at once.
+func scanReader(r io.Reader, fn func(string)) error {
+	reader := bufio.NewReader(r)
+	for {
+		line, err := reader.ReadString('\n')
+		if line != "" {
+			fn(strings.TrimSuffix(line, "\n"))
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // reachability lists which refs reach each commit, and whether they are all

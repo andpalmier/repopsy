@@ -68,3 +68,41 @@ func TestTrackString(t *testing.T) {
 		t.Error("a multi-line string was accepted")
 	}
 }
+
+func TestTrackStringKeepsRecordSeparatorInSubject(t *testing.T) {
+	b := newRepo(t)
+	b.Write("a.txt", "needle\n", 0o644)
+	b.Commit("sub\x1eject")
+	main := b.Branch()
+
+	h, err := b.open().TrackString(context.Background(), "needle", []TrackRef{{Label: main, Rev: "refs/heads/" + main}})
+	if err != nil {
+		t.Fatalf("TrackString: %v", err)
+	}
+	if len(h.Changes) != 1 || h.Changes[0].Subject != "sub\x1eject" {
+		t.Fatalf("changes = %+v", h.Changes)
+	}
+	if len(h.Tips) != 1 || h.Tips[0].Total != 1 {
+		t.Fatalf("tips = %+v", h.Tips)
+	}
+}
+
+func TestCountOccurrencesAcrossChunks(t *testing.T) {
+	needle := []byte("abc")
+	content := strings.Repeat("x", 32*1024-1) + "abc"
+	got, err := countOccurrences(strings.NewReader(content), needle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("count across chunk boundary = %d, want 1", got)
+	}
+
+	got, err = countOccurrences(strings.NewReader("aaaaa"), []byte("aa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("overlapping count = %d, want 2", got)
+	}
+}

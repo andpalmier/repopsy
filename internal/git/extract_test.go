@@ -142,6 +142,27 @@ func TestExtractCreatesDestination(t *testing.T) {
 	}
 }
 
+func TestExtractSymlinkOnlyDirectoryCreatesParent(t *testing.T) {
+	b := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(b.Dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.Symlink("target", "d/link")
+	hash := b.Commit("symlink only")
+
+	dest := filepath.Join(t.TempDir(), "snap")
+	if _, err := b.open().Extract(context.Background(), hash, dest, ExtractOptions{}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(dest, "d", "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("d/link is not a symlink: %v", info.Mode())
+	}
+}
+
 func TestExtractUnknownHash(t *testing.T) {
 	b := newRepo(t)
 	b.Write("f.txt", "x\n", 0o644)

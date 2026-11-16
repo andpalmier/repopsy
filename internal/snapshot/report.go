@@ -66,6 +66,57 @@ var reportFuncs = template.FuncMap{
 		}
 		return s
 	},
+	"text":      safeText,
+	"multiline": safeMultiline,
+}
+
+// safeText escapes control characters so untrusted text cannot inject terminal
+// escape sequences. Newlines and tabs become visible escapes because this is
+// for fields that occupy one line.
+func safeText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if isControl(r) {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+// safeMultiline keeps line breaks and tabs for readable messages but escapes
+// every other control character, including terminal escape sequences.
+func safeMultiline(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\n', '\t':
+			b.WriteRune(r)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if isControl(r) {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 // render is the shared body of every report's Render method.
@@ -104,10 +155,10 @@ Reflogs are local to a repository and are NOT transferred by clone. An empty
 log below means either that no ref ever moved, or that this repository is a
 clone or a bare mirror and its history was never rewritten here.
 
-{{if .Entries}}{{range .Entries}}{{.Ref}}
+{{if .Entries}}{{range .Entries}}{{.Ref | text}}
   {{.Commit}}  {{.At | formatDate}}
-  {{.Action}}
-  by {{or_ .Actor "(unknown)"}} <{{.Email}}>
+  {{.Action | text}}
+  by {{or_ .Actor "(unknown)" | text}} <{{.Email | text}}>
 {{end}}{{else}}(no reflog entries)
 {{end}}`))
 
@@ -135,13 +186,13 @@ Tags are not extracted as snapshots; their targets appear under the branches
 that reach them. An annotated tag carries its own tagger identity, date and
 signature, which is an attestation separate from the commit it points at.
 
-{{if .Tags}}{{range .Tags}}{{.Name}}
-  Target:       {{.Target}}
+{{if .Tags}}{{range .Tags}}{{.Name | text}}
+  Target:       {{.Target | text}}
   Type:         {{if .Annotated}}annotated (tag object {{.Object}}){{else}}lightweight{{end}}
-{{if .Annotated}}  Tagger:       {{or_ .Tagger "(not recorded)"}} <{{.TaggerEmail}}>
+{{if .Annotated}}  Tagger:       {{or_ .Tagger "(not recorded)" | text}} <{{.TaggerEmail | text}}>
   Date:         {{.TaggerDate | formatDate}}
   Signature:    {{if .Signed}}present{{with .SignatureType}} ({{.}}){{end}}{{else}}none{{end}}
-  Subject:      {{.Subject}}
+  Subject:      {{.Subject | text}}
 {{end}}{{end}}{{else}}(no tags)
 {{end}}`))
 
@@ -299,7 +350,7 @@ Every distinct name and email pair in the extracted history, most active first.
 Commits counts distinct commits; the role counts show how often the identity
 appeared as author or committer.
 
-{{if .Identities}}{{range .Identities}}{{or_ .Name "(no name)"}} <{{.Email}}>
+{{if .Identities}}{{range .Identities}}{{or_ .Name "(no name)" | text}} <{{.Email | text}}>
   Commits:      {{.Commits}} total ({{.AsAuthor}} as author, {{.AsCommitter}} as committer)
   First seen:   {{.First | formatDate}}
   Last seen:    {{.Last | formatDate}}
@@ -311,11 +362,11 @@ One email under several names, or one name under several emails, is invisible
 commit by commit. It is how both impersonation and a misconfigured client look.
 
 Emails used under more than one name:
-{{if .SharedEmails}}{{range .SharedEmails}}  {{.}}
+{{if .SharedEmails}}{{range .SharedEmails}}  {{. | text}}
 {{end}}{{else}}  (none)
 {{end}}
 Names used with more than one email:
-{{if .SharedNames}}{{range .SharedNames}}  {{.}}
+{{if .SharedNames}}{{range .SharedNames}}  {{. | text}}
 {{end}}{{else}}  (none)
 {{end}}
 PLACEHOLDER IDENTITIES
@@ -324,7 +375,7 @@ Identities naming no real mailbox: a reserved or machine-local domain, or an
 empty field. That is what an unconfigured client or a deliberately anonymous
 commit looks like. Each commit using one is flagged in its COMMIT_INFO.txt.
 
-{{if .Placeholders}}{{range .Placeholders}}  {{.}}
+{{if .Placeholders}}{{range .Placeholders}}  {{. | text}}
 {{end}}{{else}}  (none)
 {{end}}
 GITHUB NOREPLY CONFLICTS
@@ -334,7 +385,7 @@ its permanent ID. One ID under several handles is what a rename produces, and
 also a forged address; one handle under several IDs is not something a rename
 produces.
 
-{{if .NoreplyConflicts}}{{range .NoreplyConflicts}}  {{.}}
+{{if .NoreplyConflicts}}{{range .NoreplyConflicts}}  {{. | text}}
 {{end}}{{else}}  (none)
 {{end}}`))
 
@@ -367,19 +418,19 @@ Hooks that git ships as inert *.sample files are omitted.
 
 CONFIGURATION
 -------------
-{{if .State.ConfigSymlink}}(config is a symlink to {{.State.ConfigSymlink}}; content not read)
-{{else if .State.Config}}{{.State.Config}}{{else}}(no local configuration file)
+{{if .State.ConfigSymlink}}(config is a symlink to {{.State.ConfigSymlink | text}}; content not read)
+{{else if .State.Config}}{{.State.Config | multiline}}{{else}}(no local configuration file)
 {{end}}
 HOOKS
 -----
-{{if .State.HooksPath}}Hooks path:    {{.State.HooksPath}}
+{{if .State.HooksPath}}Hooks path:    {{.State.HooksPath | text}}
 {{end}}{{if .State.HooksExternal}}(hooks path is outside the repository; content not read)
-{{else if .State.Hooks}}{{range .State.Hooks}}{{.Name}}
-{{if .Symlink}}  Symlink:      {{.Symlink}} (content not read)
+{{else if .State.Hooks}}{{range .State.Hooks}}{{.Name | text}}
+{{if .Symlink}}  Symlink:      {{.Symlink | text}} (content not read)
 {{else}}  Size:         {{.Size}} bytes
   SHA-256:      {{.SHA256}}
   Executable:   {{if .Executable}}yes{{else}}no - git will not run it{{end}}
   Content:{{if .Truncated}} (truncated){{end}}
-{{.Content}}
+{{.Content | multiline}}
 {{end}}{{end}}{{else}}(no hooks installed)
 {{end}}`))

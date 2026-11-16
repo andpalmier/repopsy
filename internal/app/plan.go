@@ -57,10 +57,8 @@ func buildPlan(ctx context.Context, out *console.Console, repo *git.Repository, 
 
 	if cfg.Branch != "" {
 		// An explicit branch means a flat layout, so no ref directory.
-		p.runs = []branchRun{{label: cfg.Branch, rev: cfg.Branch, dir: outDir}}
-		if _, err := repo.RevList(ctx, "refs/heads/"+cfg.Branch, 1); err == nil {
-			p.runs[0].ref = "refs/heads/" + cfg.Branch
-		}
+		ref := "refs/heads/" + cfg.Branch
+		p.runs = []branchRun{{label: cfg.Branch, ref: ref, rev: ref, dir: outDir}}
 	} else {
 		refs, err := selectRefs(ctx, repo, cfg)
 		if err != nil {
