@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,6 +216,9 @@ func TestReadStateTruncatesAHugeHook(t *testing.T) {
 	// The size and hash must describe the whole file, not the excerpt.
 	if h.Size != int64(len(big)) {
 		t.Errorf("Size = %d, want %d", h.Size, len(big))
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte(big))); h.SHA256 != want {
+		t.Errorf("SHA256 = %q, want the hash of the whole file %q", h.SHA256, want)
 	}
 }
 

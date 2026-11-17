@@ -204,6 +204,22 @@ func TestNewIdentitiesAggregates(t *testing.T) {
 	}
 }
 
+func TestNewIdentitiesCountsEachCommitOncePerKey(t *testing.T) {
+	commits := []git.Commit{{
+		Hash:   "one",
+		Author: "Alice", AuthorEmail: "same@example.org",
+		Committer: "Alicia", CommitterEmail: "same@example.org",
+	}}
+
+	ids := NewIdentities(commits)
+	if len(ids.KeyCommits) != 1 {
+		t.Fatalf("KeyCommits = %+v, want one key", ids.KeyCommits)
+	}
+	if got := ids.KeyCommits[0]; got.Key != "email:same@example.org" || got.Commits != 1 {
+		t.Fatalf("KeyCommits[0] = %+v, want email:same@example.org with 1 commit", got)
+	}
+}
+
 func TestNewIdentitiesFindsCollisions(t *testing.T) {
 	commits := []git.Commit{
 		// One email, two names — how impersonation looks.
@@ -276,7 +292,7 @@ func TestIdentitiesEmpty(t *testing.T) {
 	if !strings.Contains(out, "(no identities)") {
 		t.Errorf("expected an explicit empty marker:\n%s", out)
 	}
-	if strings.Count(out, "(none)") != 4 {
+	if strings.Count(out, "(none)") != 5 {
 		t.Errorf("every finding section should report (none):\n%s", out)
 	}
 }

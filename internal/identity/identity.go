@@ -92,6 +92,19 @@ func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
 
+// Key returns the overlap key for an email: the GitHub handle for a noreply
+// address, otherwise the normalized email. An empty email has no key.
+func Key(email string) string {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return ""
+	}
+	if n, ok := ParseNoreply(email); ok {
+		return "github:" + n.Handle
+	}
+	return "email:" + email
+}
+
 // IsWebFlow reports whether an identity is GitHub's own committer identity.
 func IsWebFlow(name, email string) bool {
 	return NormalizeEmail(email) == WebFlowEmail && name == "GitHub"

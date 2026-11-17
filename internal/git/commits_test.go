@@ -156,7 +156,7 @@ func TestParseCommitTokens(t *testing.T) {
 				if c.Encoding != "ISO-8859-1" {
 					t.Errorf("Encoding = %q", c.Encoding)
 				}
-				if c.Notes != "reviewed by bob" {
+				if c.Notes != "reviewed by bob\n" {
 					t.Errorf("Notes = %q", c.Notes)
 				}
 			},
@@ -210,10 +210,10 @@ func TestParseCommitTokens(t *testing.T) {
 			},
 		},
 		{
-			name:   "multi-line body is captured and trimmed",
-			mutate: func(r *rec) { r.body = "Subject line\n\nBody paragraph.\n\n\n" },
+			name:   "multi-line body keeps leading and trailing whitespace",
+			mutate: func(r *rec) { r.body = "  Subject line\n\nBody paragraph.  \n\n\n" },
 			check: func(t *testing.T, c Commit) {
-				if c.FullMessage != "Subject line\n\nBody paragraph." {
+				if c.FullMessage != "  Subject line\n\nBody paragraph.  \n\n\n" {
 					t.Errorf("FullMessage = %q", c.FullMessage)
 				}
 			},

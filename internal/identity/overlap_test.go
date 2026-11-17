@@ -86,3 +86,42 @@ func TestLoadRejectsAnUnexplodedDirectory(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestOverlapsCountsDistinctCommitsByKey(t *testing.T) {
+	commit := git.Commit{
+		Hash:   "one",
+		Author: "Alice", AuthorEmail: "same@example.org",
+		Committer: "Alicia", CommitterEmail: "same@example.org",
+	}
+	ids := snapshot.NewIdentities([]git.Commit{commit})
+
+	textDir := t.TempDir()
+	if err := snapshot.Write(textDir, ids); err != nil {
+		t.Fatal(err)
+	}
+	jsonDir := t.TempDir()
+	if err := snapshot.Write(jsonDir, ids); err != nil {
+		t.Fatal(err)
+	}
+	if err := snapshot.WriteJSON(jsonDir, ids); err != nil {
+		t.Fatal(err)
+	}
+
+	var sources []identity.Source
+	for _, dir := range []string{textDir, jsonDir} {
+		src, err := identity.Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, src)
+	}
+	got := identity.Overlaps(sources, identity.DefaultIgnore)
+	if len(got) != 1 || len(got[0].Uses) != 2 {
+		t.Fatalf("overlaps = %+v", got)
+	}
+	for _, use := range got[0].Uses {
+		if use.Commits != 1 {
+			t.Errorf("%s counts %d commits, want 1", use.Repository, use.Commits)
+		}
+	}
+}

@@ -65,3 +65,22 @@ func TestDedupeLinkFailureIsReturnedAndSnapshotStaysRecorded(t *testing.T) {
 		t.Fatalf("extracted = %+v", got)
 	}
 }
+
+func TestRunInvalidBranchLeavesNoOutputDirectory(t *testing.T) {
+	b := gittest.New(t).WithCommits(1)
+	outDir := filepath.Join(t.TempDir(), "out")
+
+	err := Run(context.Background(), Config{
+		RepoPath:  b.Dir,
+		OutputDir: outDir,
+		Branch:    "no-such-branch",
+		Workers:   1,
+		Writer:    io.Discard,
+	})
+	if err == nil {
+		t.Fatal("Run succeeded with a missing branch")
+	}
+	if _, statErr := os.Stat(outDir); !os.IsNotExist(statErr) {
+		t.Fatalf("output directory was left behind after validation failure: %v", statErr)
+	}
+}

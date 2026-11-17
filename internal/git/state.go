@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -174,23 +175,32 @@ func readHook(root *os.Root, name string) (Hook, error) {
 	if !info.Mode().IsRegular() {
 		return Hook{}, fmt.Errorf("not a regular file")
 	}
-	content, err := root.ReadFile(name)
+	f, err := root.Open(name)
 	if err != nil {
 		return Hook{}, err
 	}
+	defer func() { _ = f.Close() }()
 
-	// Hashed in full even when the recorded content is truncated.
-	sum := sha256.Sum256(content)
+	// Read only the excerpt, but hash the whole file as it streams past.
+	first := make([]byte, maxHookBytes)
+	n, readErr := io.ReadFull(f, first)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		return Hook{}, readErr
+	}
+	first = first[:n]
+	h := sha256.New()
+	_, _ = h.Write(first)
+	if _, err := io.Copy(h, f); err != nil {
+		return Hook{}, err
+	}
+
 	hook := Hook{
 		Name:       name,
 		Size:       info.Size(),
-		SHA256:     hex.EncodeToString(sum[:]),
+		SHA256:     hex.EncodeToString(h.Sum(nil)),
 		Executable: info.Mode().Perm()&0o111 != 0,
-		Content:    string(content),
-	}
-	if len(content) > maxHookBytes {
-		hook.Content = string(content[:maxHookBytes])
-		hook.Truncated = true
+		Content:    string(first),
+		Truncated:  info.Size() > maxHookBytes,
 	}
 	return hook, nil
 }

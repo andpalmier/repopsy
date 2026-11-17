@@ -215,6 +215,13 @@ type Identity struct {
 	Last  time.Time
 }
 
+// KeyCommit is the distinct-commit total for one overlap key. One key can cover
+// several name/email records, so adding their Commits would count a commit twice.
+type KeyCommit struct {
+	Key     string
+	Commits int
+}
+
 // Identities records every distinct identity in the extracted history.
 //
 // Collisions matter: one email used under several names, or one name under
@@ -222,6 +229,9 @@ type Identity struct {
 // is how impersonation and misconfigured clients both look.
 type Identities struct {
 	Identities []Identity
+
+	// KeyCommits counts distinct commits per overlap key.
+	KeyCommits []KeyCommit
 
 	// SharedEmails and SharedNames list the colliding values.
 	SharedEmails []string
@@ -249,6 +259,7 @@ func NewIdentities(commits []git.Commit) Identities {
 	type key struct{ name, email string }
 	seen := map[key]*Identity{}
 	commitSeen := map[key]map[string]bool{}
+	keySeen := map[string]map[string]bool{}
 
 	record := func(commit, name, email string, at time.Time, author bool) {
 		k := key{name, email}
@@ -273,6 +284,12 @@ func NewIdentities(commits []git.Commit) Identities {
 			commitSeen[k][commit] = true
 			id.Commits++
 		}
+		if key := identity.Key(email); key != "" {
+			if keySeen[key] == nil {
+				keySeen[key] = map[string]bool{}
+			}
+			keySeen[key][commit] = true
+		}
 	}
 
 	for i, c := range commits {
@@ -284,10 +301,19 @@ func NewIdentities(commits []git.Commit) Identities {
 		record(commit, c.Committer, c.CommitterEmail, c.CommitDate, false)
 	}
 
-	result := Identities{Identities: make([]Identity, 0, len(seen))}
+	result := Identities{
+		Identities: make([]Identity, 0, len(seen)),
+		KeyCommits: make([]KeyCommit, 0, len(keySeen)),
+	}
 	for _, id := range seen {
 		result.Identities = append(result.Identities, *id)
 	}
+	for key, commits := range keySeen {
+		result.KeyCommits = append(result.KeyCommits, KeyCommit{Key: key, Commits: len(commits)})
+	}
+	sort.Slice(result.KeyCommits, func(i, j int) bool {
+		return result.KeyCommits[i].Key < result.KeyCommits[j].Key
+	})
 	// Most active first, then by email and name so the order is stable.
 	sort.Slice(result.Identities, func(a, b int) bool {
 		x, y := result.Identities[a], result.Identities[b]
@@ -355,6 +381,14 @@ appeared as author or committer.
   First seen:   {{.First | formatDate}}
   Last seen:    {{.Last | formatDate}}
 {{end}}{{else}}(no identities)
+{{end}}
+COMMITS BY KEY
+--------------
+Distinct commits per overlap key. This is the total across names that share an
+email or GitHub account.
+
+{{if .KeyCommits}}{{range .KeyCommits}}{{.Key}}	{{.Commits}}
+{{end}}{{else}}(none)
 {{end}}
 COLLISIONS
 ----------

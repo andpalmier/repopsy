@@ -242,9 +242,9 @@ func parseCommitFields(parts []string) (Commit, error) {
 		ParentHashes: parents,
 		Encoding:     parts[14],
 		Refs:         parts[15],
-		Notes:        strings.TrimSpace(parts[16]),
+		Notes:        parts[16],
 		Subject:      parts[17],
-		FullMessage:  strings.TrimSpace(parts[18]),
+		FullMessage:  parts[18],
 	}, nil
 }
 

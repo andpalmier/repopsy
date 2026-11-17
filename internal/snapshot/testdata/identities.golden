@@ -22,6 +22,15 @@ Bob Ops <alice@example.com>
   First seen:   2023-02-01T09:00:00+01:00
   Last seen:    2023-02-01T09:00:00+01:00
 
+COMMITS BY KEY
+--------------
+Distinct commits per overlap key. This is the total across names that share an
+email or GitHub account.
+
+email:alice@example.com	2
+github:carol	1
+github:mallory	1
+
 COLLISIONS
 ----------
 One email under several names, or one name under several emails, is invisible

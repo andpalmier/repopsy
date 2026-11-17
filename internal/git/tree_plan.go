@@ -72,6 +72,22 @@ func (r *Repository) listTree(ctx context.Context, hash string) ([]treeEntry, er
 	return entries, nil
 }
 
+// BlobHashesAt maps every blob path in rev's tree to its blob hash. Paths may
+// contain newlines because ls-tree output is NUL-delimited.
+func (r *Repository) BlobHashesAt(ctx context.Context, rev string) (map[string]string, error) {
+	entries, err := r.listTree(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	blobs := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.mode != modeSubmodule {
+			blobs[e.path] = e.sha
+		}
+	}
+	return blobs, nil
+}
+
 // plannedEntry is a blob with the decisions made about it.
 type plannedEntry struct {
 	treeEntry

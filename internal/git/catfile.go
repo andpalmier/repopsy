@@ -34,6 +34,12 @@ func (r *Repository) catFileBatchStream(ctx context.Context, ids []string, fn fu
 	})
 }
 
+// ReadObjects streams the objects named by ids through one cat-file process.
+// The callback must consume each reader before returning.
+func (r *Repository) ReadObjects(ctx context.Context, ids []string, fn func(i int, content io.Reader) error) error {
+	return r.catFileBatchStream(ctx, ids, fn)
+}
+
 // ReadObjectAt resolves rev:path and streams the blob to fn. The path may
 // contain a newline or carriage return because it is resolved as one argument,
 // not embedded in cat-file's line-based protocol.

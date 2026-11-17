@@ -262,18 +262,27 @@ func (i Identities) JSON() any {
 		FirstSeen   string `json:"first_seen"`
 		LastSeen    string `json:"last_seen"`
 	}
+	type keyCommitJSON struct {
+		Key     string `json:"key"`
+		Commits int    `json:"commits"`
+	}
 	ids := []identityJSON{}
 	for _, id := range i.Identities {
 		ids = append(ids, identityJSON{id.Name, id.Email, id.Commits, id.AsAuthor, id.AsCommitter, jsonDate(id.First), jsonDate(id.Last)})
 	}
+	keys := []keyCommitJSON{}
+	for _, k := range i.KeyCommits {
+		keys = append(keys, keyCommitJSON{k.Key, k.Commits})
+	}
 	return struct {
-		SchemaVersion    int            `json:"schema_version"`
-		Identities       []identityJSON `json:"identities"`
-		SharedEmails     []string       `json:"shared_emails"`
-		SharedNames      []string       `json:"shared_names"`
-		Placeholders     []string       `json:"placeholders"`
-		NoreplyConflicts []string       `json:"noreply_conflicts"`
-	}{SchemaVersion, ids, nonNil(i.SharedEmails), nonNil(i.SharedNames), nonNil(i.Placeholders), nonNil(i.NoreplyConflicts)}
+		SchemaVersion    int             `json:"schema_version"`
+		Identities       []identityJSON  `json:"identities"`
+		KeyCommits       []keyCommitJSON `json:"key_commits"`
+		SharedEmails     []string        `json:"shared_emails"`
+		SharedNames      []string        `json:"shared_names"`
+		Placeholders     []string        `json:"placeholders"`
+		NoreplyConflicts []string        `json:"noreply_conflicts"`
+	}{SchemaVersion, ids, keys, nonNil(i.SharedEmails), nonNil(i.SharedNames), nonNil(i.Placeholders), nonNil(i.NoreplyConflicts)}
 }
 
 // JSON implements JSONReport.

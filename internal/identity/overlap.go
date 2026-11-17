@@ -37,12 +37,13 @@ type Seen struct {
 type Source struct {
 	Label      string
 	Identities []Seen
+	KeyCommits map[string]int
 }
 
 // Load reads the identities of an exploded repository, from IDENTITIES.json
 // when it was written and IDENTITIES.txt otherwise.
 func Load(dir string) (Source, error) {
-	src := Source{Label: dir}
+	src := Source{Label: dir, KeyCommits: map[string]int{}}
 	if data, err := os.ReadFile(filepath.Join(dir, "IDENTITIES.json")); err == nil {
 		var doc struct {
 			Identities []struct {
@@ -52,6 +53,10 @@ func Load(dir string) (Source, error) {
 				AsAuthor    int    `json:"as_author"`
 				AsCommitter int    `json:"as_committer"`
 			} `json:"identities"`
+			KeyCommits []struct {
+				Key     string `json:"key"`
+				Commits int    `json:"commits"`
+			} `json:"key_commits"`
 		}
 		if err := json.Unmarshal(data, &doc); err != nil {
 			return src, fmt.Errorf("%s: %w", filepath.Join(dir, "IDENTITIES.json"), err)
@@ -64,6 +69,9 @@ func Load(dir string) (Source, error) {
 			}
 			src.Identities = append(src.Identities, Seen{id.Name, id.Email, commits})
 		}
+		for _, k := range doc.KeyCommits {
+			src.KeyCommits[k.Key] = k.Commits
+		}
 		return src, nil
 	}
 
@@ -75,7 +83,7 @@ func Load(dir string) (Source, error) {
 		return src, err
 	}
 	defer func() { _ = f.Close() }()
-	src.Identities, err = parseIdentitiesText(f)
+	src.Identities, src.KeyCommits, err = parseIdentitiesText(f)
 	return src, err
 }
 
@@ -85,17 +93,35 @@ var (
 	legacyCommitsLine = regexp.MustCompile(`^  Commits:\s+(\d+) as author, (\d+) as committer$`)
 )
 
-// parseIdentitiesText reads the identity list at the top of IDENTITIES.txt:
-// an unindented "Name <email>" line, then an indented "Commits:" line.
-func parseIdentitiesText(r io.Reader) ([]Seen, error) {
+// parseIdentitiesText reads the identity list and per-key commit totals from
+// IDENTITIES.txt: an unindented "Name <email>" line, then an indented
+// "Commits:" line, followed by the COMMITS BY KEY section.
+func parseIdentitiesText(r io.Reader) ([]Seen, map[string]int, error) {
 	var ids []Seen
+	keys := map[string]int{}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var pending *Seen
+	inKeys := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "COLLISIONS" {
 			break
+		}
+		if line == "COMMITS BY KEY" {
+			inKeys = true
+			continue
+		}
+		if inKeys {
+			key, count, ok := strings.Cut(line, "\t")
+			if !ok {
+				continue
+			}
+			n, err := strconv.Atoi(count)
+			if err == nil {
+				keys[key] = n
+			}
+			continue
 		}
 		if m := commitsLine.FindStringSubmatch(line); m != nil && pending != nil {
 			pending.Commits, _ = strconv.Atoi(m[1])
@@ -119,7 +145,7 @@ func parseIdentitiesText(r io.Reader) ([]Seen, error) {
 			pending = &Seen{Name: name, Email: m[2]}
 		}
 	}
-	return ids, scanner.Err()
+	return ids, keys, scanner.Err()
 }
 
 // Use is how one repository uses an overlapping identity.
@@ -148,12 +174,9 @@ func Overlaps(sources []Source, ignore []string) []Overlap {
 	byKey := map[string]*keyed{}
 	for si, src := range sources {
 		for _, id := range src.Identities {
-			if NormalizeEmail(id.Email) == "" || ignored(id, ignore) {
+			key := Key(id.Email)
+			if key == "" || ignored(id, ignore) {
 				continue
-			}
-			key := "email:" + NormalizeEmail(id.Email)
-			if n, ok := ParseNoreply(id.Email); ok {
-				key = "github:" + n.Handle
 			}
 			k := byKey[key]
 			if k == nil {
@@ -167,7 +190,11 @@ func Overlaps(sources []Source, ignore []string) []Overlap {
 				k.order = append(k.order, si)
 			}
 			u.Identities = append(u.Identities, fmt.Sprintf("%s <%s>", id.Name, id.Email))
-			u.Commits += id.Commits
+			if commits, ok := src.KeyCommits[key]; ok {
+				u.Commits = commits
+			} else {
+				u.Commits += id.Commits
+			}
 		}
 	}
 

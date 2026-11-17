@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"regexp"
 	"sort"
@@ -224,50 +225,65 @@ func Scan(ctx context.Context, repo *git.Repository, commits []git.Commit, tips 
 }
 
 // liveAtTips checks, for each occurrence, whether each ref's tip still has the
-// value at the same path. The check compares fingerprints of what the tip's
-// file contains, so no value has to be kept from the scan.
+// value at the same path. It lists each tip's paths once and scans each unique
+// blob once, rather than starting two Git processes for every tip and path.
 func liveAtTips(ctx context.Context, repo *git.Repository, findings []Finding, tips []Tip) error {
-	type key struct{ tip, path string }
-	type request struct{ tip, path string }
-	var requests []request
-	index := map[key]int{}
+	wanted := map[string]bool{}
 	for _, f := range findings {
 		for _, o := range f.Occurrences {
-			for _, t := range tips {
-				k := key{t.Rev, o.Path}
-				if _, ok := index[k]; ok {
-					continue
-				}
-				index[k] = len(requests)
-				requests = append(requests, request{tip: t.Rev, path: o.Path})
-			}
+			wanted[o.Path] = true
 		}
 	}
+	if len(wanted) == 0 || len(tips) == 0 {
+		return nil
+	}
 
-	present := make([]map[string]bool, len(requests))
-	for i, req := range requests {
-		err := repo.ReadObjectAt(ctx, req.tip, req.path, func(content io.Reader, found bool) error {
-			if !found {
-				return nil
-			}
-			present[i] = map[string]bool{}
-			return scanReader(content, func(line string) {
-				for _, m := range scanLine(line) {
-					present[i][m.hash] = true
-				}
-			})
-		})
+	tipBlobs := make([]map[string]string, len(tips))
+	unique := map[string]bool{}
+	for i, t := range tips {
+		all, err := repo.BlobHashesAt(ctx, t.Rev)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to list paths at %s: %w", t.Label, err)
 		}
+		m := make(map[string]string)
+		for path := range wanted {
+			if blob, ok := all[path]; ok {
+				m[path] = blob
+				unique[blob] = true
+			}
+		}
+		tipBlobs[i] = m
+	}
+
+	blobs := make([]string, 0, len(unique))
+	for blob := range unique {
+		blobs = append(blobs, blob)
+	}
+	sort.Strings(blobs)
+	index := make(map[string]int, len(blobs))
+	for i, blob := range blobs {
+		index[blob] = i
+	}
+
+	present := make([]map[string]bool, len(blobs))
+	if err := repo.ReadObjects(ctx, blobs, func(i int, content io.Reader) error {
+		present[i] = map[string]bool{}
+		return scanReader(content, func(line string) {
+			for _, m := range scanLine(line) {
+				present[i][m.hash] = true
+			}
+		})
+	}); err != nil {
+		return err
 	}
 
 	for fi := range findings {
 		f := &findings[fi]
 		for oi := range f.Occurrences {
 			o := &f.Occurrences[oi]
-			for _, t := range tips {
-				if present[index[key{t.Rev, o.Path}]][f.Fingerprint] {
+			for ti, t := range tips {
+				blob, ok := tipBlobs[ti][o.Path]
+				if ok && present[index[blob]][f.Fingerprint] {
 					o.LiveAt = append(o.LiveAt, t.Label)
 				}
 			}

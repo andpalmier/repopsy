@@ -121,6 +121,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	if !cfg.DryRun {
+		if err := createOutputDir(outDir); err != nil {
+			return err
+		}
+	}
 
 	out.Banner(console.Header{
 		RepoPath:  repo.Path,
@@ -137,6 +142,11 @@ func Run(ctx context.Context, cfg Config) error {
 
 	p, err := buildPlan(ctx, out, repo, outDir, cfg)
 	if err != nil {
+		if !cfg.DryRun {
+			// The directory is empty because planning writes nothing. Removing it
+			// lets a corrected command reuse the same output path.
+			_ = os.Remove(outDir)
+		}
 		return err
 	}
 	if p.pullHint > 0 {
@@ -195,7 +205,8 @@ func scopeText(cfg Config) string {
 }
 
 // resolveOutputDir picks the output directory and refuses to reuse an existing
-// one, so a previous explosion is never mixed with a new one.
+// one, so a previous explosion is never mixed with a new one. It does not create
+// the directory; Run does that before starting work.
 func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 	outDir := cfg.OutputDir
 	if outDir == "" {
@@ -215,13 +226,14 @@ func resolveOutputDir(cfg Config, repo *git.Repository) (string, error) {
 	if info, err := os.Stat(outDir); err == nil && info.IsDir() {
 		return "", fmt.Errorf("output directory already exists: %s", outDir)
 	}
-
-	// Created before any work starts. An unwritable destination is otherwise
-	// only discovered once extraction is under way, and then it surfaces once
-	// per snapshot and once per root record — many messages for one cause,
-	// after the run has already spent its time.
-	if err := os.MkdirAll(outDir, outputDirPerms); err != nil {
-		return "", fmt.Errorf("cannot create output directory %s: %w", outDir, err)
-	}
 	return outDir, nil
+}
+
+// createOutputDir creates the destination early so an unwritable path fails
+// before extraction starts. Run removes it if planning later fails.
+func createOutputDir(outDir string) error {
+	if err := os.MkdirAll(outDir, outputDirPerms); err != nil {
+		return fmt.Errorf("cannot create output directory %s: %w", outDir, err)
+	}
+	return nil
 }
