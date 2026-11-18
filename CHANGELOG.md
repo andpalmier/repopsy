@@ -4,6 +4,22 @@ Versions follow [semantic versioning](https://semver.org) and are taken from git
 tags at release time. Earlier releases are described on the
 [Releases](https://github.com/andpalmier/repopsy/releases) page.
 
+## 2.2.2 (2026-11-18)
+
+### Fixed
+
+- Failed runs no longer leave an empty output directory behind and block a corrected rerun.
+- Commit messages and notes keep leading and trailing whitespace exactly as Git recorded it.
+- `-b` resolves the branch under `refs/heads/`, snapshot directories use the full commit hash, and symlink-only directories create their parents.
+- `--track` uses NUL-delimited output and streams blob counting, so newline paths and large blobs are handled correctly.
+- `--scan-secrets` handles newline paths, streams file contents, and batches live checks with one `ls-tree` per tip plus one `cat-file` pass for unique blobs.
+- `repopsy identities` counts distinct commits per email or GitHub account. `IDENTITIES.txt` and JSON now include per-key totals so one commit is not counted twice.
+- Text records escape terminal control characters.
+
+### Security
+
+- Hooks are hashed while streaming and only the first 4 KB is retained, so a huge hook cannot force a full-file allocation.
+
 ## 2.2.1 (2026-11-08)
 
 - Rebuilt the release assets after GitHub returned 504 for the v2.2.0 binary downloads.
